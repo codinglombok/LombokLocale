@@ -1,0 +1,4 @@
+{
+  "locale.negotiation.no_match": "Tidak ada locale yang cocok untuk {requested}; memakai {fallback}",
+  "catalog.missing_message": "Terjemahan untuk {messageId} tidak ditemukan"
+}

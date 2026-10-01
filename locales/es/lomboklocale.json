@@ -1,0 +1,4 @@
+{
+  "locale.negotiation.no_match": "No se encontró una configuración regional para {requested}; se usa {fallback}",
+  "catalog.missing_message": "Falta la traducción de {messageId}"
+}

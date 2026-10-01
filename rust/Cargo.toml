@@ -1,0 +1,22 @@
+[package]
+name = "lomboklocale"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+description = "Zero-dependency i18n: BCP-47 negotiation, CLDR plural rules, MessageFormat 2-lite runtime, number/date/currency formatting."
+keywords = ["i18n","l10n","bcp47","plural","no-std"]
+categories = ["internationalization","no-std","value-formatting"]
+rust-version = "1.75"
+repository = "https://github.com/codinglombok/LombokLocale"
+
+[lib]
+name = "lomboklocale"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = []
+
+# Test-only (not linked into the library): reads the cross-language vectors.
+[dev-dependencies]
+serde_json = "1"

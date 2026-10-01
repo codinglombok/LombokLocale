@@ -1,0 +1,4 @@
+{
+  "locale.negotiation.no_match": "{requested} に一致するロケールが見つかりません。{fallback} を使用します",
+  "catalog.missing_message": "{messageId} の翻訳がありません"
+}

@@ -1,0 +1,4 @@
+{
+  "locale.negotiation.no_match": "未找到与 {requested} 匹配的区域设置；使用 {fallback}",
+  "catalog.missing_message": "缺少 {messageId} 的翻译"
+}

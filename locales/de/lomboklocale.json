@@ -1,0 +1,4 @@
+{
+  "locale.negotiation.no_match": "Keine passende Locale für {requested} gefunden; verwende {fallback}",
+  "catalog.missing_message": "Fehlende Übersetzung für {messageId}"
+}

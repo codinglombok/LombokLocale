@@ -1,0 +1,20 @@
+{
+  "name": "lomboklocale",
+  "version": "0.1.0",
+  "description": "Zero-dependency i18n: BCP-47 negotiation, CLDR plural/ordinal rules, MessageFormat 2-lite, number/date/currency formatting, message catalogs. Byte-identical with the Rust reference.",
+  "license": "Apache-2.0 OR MIT",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": { ".": { "types": "./dist/src/index.d.ts", "import": "./dist/src/index.js" } },
+  "files": ["dist/src", "README.md"],
+  "sideEffects": false,
+  "engines": { "node": ">=18" },
+  "keywords": ["i18n", "l10n", "bcp47", "plural", "messageformat", "cldr"],
+  "repository": { "type": "git", "url": "git+https://github.com/codinglombok/LombokLocale.git", "directory": "typescript" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/vectors.test.js"
+  },
+  "devDependencies": { "typescript": "^5.6.0", "@types/node": "^22.0.0" }
+}

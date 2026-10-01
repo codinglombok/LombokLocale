@@ -1,0 +1,4 @@
+{
+  "locale.negotiation.no_match": "Nenhuma localidade correspondente para {requested}; usando {fallback}",
+  "catalog.missing_message": "Tradução ausente para {messageId}"
+}
