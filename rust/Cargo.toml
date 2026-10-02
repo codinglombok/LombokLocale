@@ -1,13 +1,15 @@
 [package]
 name = "lomboklocale"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-license = "Apache-2.0 OR MIT"
-description = "Zero-dependency i18n: BCP-47 negotiation, CLDR plural rules, MessageFormat 2-lite runtime, number/date/currency formatting."
+license = "(Apache-2.0 OR MIT) AND Unicode-3.0"
+description = "BCP 47 negotiation, CLDR 47 plural rules, number/currency/date formatting and an ICU MessageFormat subset with identical results in Rust, TypeScript, Python, Go and PHP. No dependencies."
 keywords = ["i18n","l10n","bcp47","plural","no-std"]
 categories = ["internationalization","no-std","value-formatting"]
-rust-version = "1.75"
+rust-version = "1.70"
 repository = "https://github.com/codinglombok/LombokLocale"
+readme = "README.md"
+include = ["src/**", "tests/**", "README.md", "LICENSE-APACHE", "LICENSE-MIT", "LICENSE-UNICODE"]
 
 [lib]
 name = "lomboklocale"

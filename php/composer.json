@@ -1,0 +1,20 @@
+{
+    "name": "codinglombok/lomboklocale",
+    "description": "BCP 47 negotiation, CLDR 47 plural rules, number/currency/date formatting and an ICU MessageFormat subset with identical results in PHP, Rust, TypeScript, Python and Go. No dependencies.",
+    "type": "library",
+    "license": ["Apache-2.0", "MIT"],
+    "keywords": ["i18n", "l10n", "bcp47", "cldr", "plural", "messageformat", "number-format", "currency"],
+    "require": {
+        "php": ">=8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "LombokLocale\\": "src/"
+        }
+    },
+    "homepage": "https://github.com/codinglombok/LombokLocale",
+    "authors": [{ "name": "codinglombok" }],
+    "scripts": {
+        "test": "php tests/run.php"
+    }
+}

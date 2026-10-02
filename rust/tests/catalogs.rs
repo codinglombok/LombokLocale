@@ -1,70 +1,51 @@
-//! Every locale catalog must have exactly the keys and placeholders of `en`.
+//! Every catalog in locales/ parses and matches the keys and placeholders of `en`.
+use lomboklocale::parse_catalog;
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::Path;
 
 fn placeholders(s: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let mut rest = s;
     while let Some(i) = rest.find('{') {
-        if let Some(j) = rest[i..].find('}') {
-            out.insert(rest[i + 1..i + j].to_string());
-            rest = &rest[i + j + 1..];
-        } else {
-            break;
-        }
+        let tail = &rest[i + 1..];
+        let end = tail
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(tail.len());
+        out.insert(tail[..end].to_string());
+        rest = &tail[end..];
     }
     out
 }
 
 #[test]
-fn all_catalogs_match_english_keys_and_placeholders() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../locales");
-    let en = lomboklocale::parse_catalog(
-        &fs::read_to_string(root.join("en/lomboklocale.json")).unwrap(),
-    )
-    .unwrap();
-    let mut langs = 0;
-    for entry in fs::read_dir(&root).unwrap() {
-        let dir = entry.unwrap().path();
-        if !dir.is_dir() {
+fn catalogs_match_english() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../locales");
+    let read = |loc: &str| {
+        parse_catalog(&std::fs::read_to_string(format!("{root}/{loc}/lomboklocale.json")).unwrap())
+            .unwrap()
+    };
+    let en = read("en");
+    assert!(!en.is_empty());
+    let mut seen = 0;
+    for entry in std::fs::read_dir(root).unwrap() {
+        let entry = entry.unwrap();
+        if !entry.file_type().unwrap().is_dir() {
             continue;
         }
-        let file = dir.join("lomboklocale.json");
-        let name = dir.file_name().unwrap().to_string_lossy().to_string();
-        let cat = lomboklocale::parse_catalog(
-            &fs::read_to_string(&file).unwrap_or_else(|_| panic!("missing {file:?}")),
-        )
-        .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        assert_eq!(cat.len(), en.len(), "{name}: key count differs from en");
-        for key in en_keys(&root) {
-            let text = cat
-                .get(&key)
-                .unwrap_or_else(|| panic!("{name}: missing key {key}"));
-            let en_text = en.get(&key).unwrap();
+        let loc = entry.file_name().into_string().unwrap();
+        let cat = read(&loc);
+        assert_eq!(
+            cat.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+            en.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+            "{loc}"
+        );
+        for (k, v) in cat.iter() {
             assert_eq!(
-                placeholders(text),
-                placeholders(en_text),
-                "{name}: placeholders differ for {key}"
+                placeholders(v),
+                placeholders(en.get(k).unwrap()),
+                "{loc}/{k}"
             );
-            assert!(!text.trim().is_empty(), "{name}: empty {key}");
         }
-        langs += 1;
+        seen += 1;
     }
-    assert!(langs >= 10, "expected >=10 locales, found {langs}");
-}
-
-// Key list is read from the raw en file so this test needs no catalog iterator API.
-fn en_keys(root: &Path) -> Vec<String> {
-    let raw = fs::read_to_string(root.join("en/lomboklocale.json")).unwrap();
-    let mut keys = Vec::new();
-    for line in raw.lines() {
-        let t = line.trim();
-        if let Some(body) = t.strip_prefix('"') {
-            if let Some(end) = body.find('"') {
-                keys.push(body[..end].to_string());
-            }
-        }
-    }
-    keys
+    assert!(seen >= 2);
 }

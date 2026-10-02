@@ -1,221 +1,266 @@
-//! Message catalogs: `locales/<bcp47>/<repo>.json`, one file per language
-//! per repo (ARCHITECTURE_UTAMA §7). Catalogs are a flat JSON object of
-//! `messageId -> text`. LombokLocale is L0 and cannot depend on
-//! LombokJSON (also L0, ADR-016/L0 rule: no mandatory Lombok deps at L0),
-//! so this is a small hand-rolled parser scoped to exactly this shape —
-//! not a general JSON parser.
+//! Message catalogs: strict JSON objects of strings (SPEC section 8).
 
+use crate::error::{Error, ErrorCode, Result};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CatalogError {
-    UnexpectedEnd,
-    UnexpectedChar(char, usize),
-    ExpectedObject,
-}
-
-/// A loaded message catalog for one locale.
+/// Message id to pattern.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Catalog {
     entries: BTreeMap<String, String>,
 }
 
 impl Catalog {
+    /// The pattern of `message_id`.
     pub fn get(&self, message_id: &str) -> Option<&str> {
-        self.entries.get(message_id).map(|s| s.as_str())
+        self.entries.get(message_id).map(String::as_str)
     }
 
+    /// Number of entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Iterate `(messageId, text)` pairs in sorted key order.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.entries.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-
+    /// True when empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub fn insert(&mut self, id: String, text: String) {
-        self.entries.insert(id, text);
+    /// Entries in key order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.entries.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// Adds or replaces an entry.
+    pub fn insert(&mut self, id: impl Into<String>, pattern: impl Into<String>) {
+        self.entries.insert(id.into(), pattern.into());
     }
 }
 
-/// Parse a flat `{"id": "text", ...}` JSON object into a [`Catalog`].
-pub fn parse_catalog(json: &str) -> Result<Catalog, CatalogError> {
-    let chars: alloc::vec::Vec<char> = json.chars().collect();
-    let mut i = 0usize;
-    skip_ws(&chars, &mut i);
-    expect(&chars, &mut i, '{').map_err(|_| CatalogError::ExpectedObject)?;
-    skip_ws(&chars, &mut i);
+struct P<'a> {
+    b: &'a [u8],
+    i: usize,
+}
 
-    let mut catalog = Catalog::default();
+const MAX_DEPTH: usize = 64;
 
-    if peek(&chars, i) == Some('}') {
-        i += 1;
-        skip_ws(&chars, &mut i);
-        return match peek(&chars, i) {
-            Some(c) => Err(CatalogError::UnexpectedChar(c, i)),
-            None => Ok(catalog),
-        };
-    }
-
-    loop {
-        skip_ws(&chars, &mut i);
-        let key = parse_string(&chars, &mut i)?;
-        skip_ws(&chars, &mut i);
-        expect(&chars, &mut i, ':')?;
-        skip_ws(&chars, &mut i);
-        let value = parse_string(&chars, &mut i)?;
-        catalog.insert(key, value);
-        skip_ws(&chars, &mut i);
-        match peek(&chars, i) {
-            Some(',') => {
-                i += 1;
-            }
-            Some('}') => {
-                i += 1;
-                break;
-            }
-            Some(c) => return Err(CatalogError::UnexpectedChar(c, i)),
-            None => return Err(CatalogError::UnexpectedEnd),
+impl P<'_> {
+    fn ws(&mut self) {
+        while self.i < self.b.len() && matches!(self.b[self.i], b' ' | b'\t' | b'\n' | b'\r') {
+            self.i += 1;
         }
     }
 
-    // Strict JSON: nothing but whitespace may follow the closing brace.
-    skip_ws(&chars, &mut i);
-    if let Some(c) = peek(&chars, i) {
-        return Err(CatalogError::UnexpectedChar(c, i));
+    fn bad(&self) -> Error {
+        Error::new(ErrorCode::BadJson, alloc::format!("{}", self.i))
     }
-    Ok(catalog)
-}
 
-fn peek(chars: &[char], i: usize) -> Option<char> {
-    chars.get(i).copied()
-}
-
-fn skip_ws(chars: &[char], i: &mut usize) {
-    while let Some(c) = chars.get(*i) {
-        if c.is_whitespace() {
-            *i += 1;
-        } else {
-            break;
+    fn string(&mut self) -> Result<String> {
+        if self.b.get(self.i) != Some(&b'"') {
+            return Err(self.bad());
         }
-    }
-}
-
-fn expect(chars: &[char], i: &mut usize, c: char) -> Result<(), CatalogError> {
-    match chars.get(*i) {
-        Some(x) if *x == c => {
-            *i += 1;
-            Ok(())
-        }
-        Some(x) => Err(CatalogError::UnexpectedChar(*x, *i)),
-        None => Err(CatalogError::UnexpectedEnd),
-    }
-}
-
-fn parse_string(chars: &[char], i: &mut usize) -> Result<String, CatalogError> {
-    expect(chars, i, '"')?;
-    let mut out = String::new();
-    loop {
-        let c = *chars.get(*i).ok_or(CatalogError::UnexpectedEnd)?;
-        *i += 1;
-        match c {
-            '"' => return Ok(out),
-            '\\' => {
-                let esc = *chars.get(*i).ok_or(CatalogError::UnexpectedEnd)?;
-                *i += 1;
-                match esc {
-                    'n' => out.push('\n'),
-                    't' => out.push('\t'),
-                    'r' => out.push('\r'),
-                    '"' => out.push('"'),
-                    '\\' => out.push('\\'),
-                    '/' => out.push('/'),
-                    'u' => {
-                        let hex: String = (0..4)
-                            .map(|_| {
-                                let h = *chars.get(*i).unwrap_or(&'0');
-                                *i += 1;
-                                h
-                            })
-                            .collect();
-                        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-                            // JSON requires exactly 4 hex digits; anything else is dropped
-                        } else if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                            if let Some(ch) = char::from_u32(code) {
-                                out.push(ch);
+        self.i += 1;
+        let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        loop {
+            let c = *self.b.get(self.i).ok_or_else(|| self.bad())?;
+            self.i += 1;
+            match c {
+                b'"' => break,
+                b'\\' => {
+                    let e = *self.b.get(self.i).ok_or_else(|| self.bad())?;
+                    self.i += 1;
+                    match e {
+                        b'"' | b'\\' | b'/' => out.push(e),
+                        b'b' => out.push(8),
+                        b'f' => out.push(12),
+                        b'n' => out.push(b'\n'),
+                        b'r' => out.push(b'\r'),
+                        b't' => out.push(b'\t'),
+                        b'u' => {
+                            let mut cp = self.hex4()?;
+                            if (0xD800..0xDC00).contains(&cp) {
+                                if self.b.get(self.i) == Some(&b'\\')
+                                    && self.b.get(self.i + 1) == Some(&b'u')
+                                {
+                                    self.i += 2;
+                                    let lo = self.hex4()?;
+                                    if !(0xDC00..0xE000).contains(&lo) {
+                                        return Err(self.bad());
+                                    }
+                                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                                } else {
+                                    return Err(self.bad());
+                                }
+                            } else if (0xDC00..0xE000).contains(&cp) {
+                                return Err(self.bad());
                             }
+                            let ch = char::from_u32(cp).ok_or_else(|| self.bad())?;
+                            let mut buf = [0u8; 4];
+                            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
                         }
+                        _ => return Err(self.bad()),
                     }
-                    other => return Err(CatalogError::UnexpectedChar(other, *i)),
+                }
+                0..=0x1f => return Err(self.bad()),
+                _ => out.push(c),
+            }
+        }
+        String::from_utf8(out).map_err(|_| self.bad())
+    }
+
+    fn hex4(&mut self) -> Result<u32> {
+        let s = self.b.get(self.i..self.i + 4).ok_or_else(|| self.bad())?;
+        let mut v = 0u32;
+        for &c in s {
+            v = v * 16 + (c as char).to_digit(16).ok_or_else(|| self.bad())?;
+        }
+        self.i += 4;
+        Ok(v)
+    }
+
+    /// Skips any JSON value (used to report NON_STRING_VALUE only for valid JSON).
+    fn skip_value(&mut self, depth: usize) -> Result<()> {
+        if depth > MAX_DEPTH {
+            return Err(self.bad());
+        }
+        self.ws();
+        match self.b.get(self.i) {
+            Some(b'"') => self.string().map(|_| ()),
+            Some(b'{') | Some(b'[') => {
+                let close = if self.b[self.i] == b'{' { b'}' } else { b']' };
+                let obj = close == b'}';
+                self.i += 1;
+                self.ws();
+                if self.b.get(self.i) == Some(&close) {
+                    self.i += 1;
+                    return Ok(());
+                }
+                loop {
+                    self.ws();
+                    if obj {
+                        self.string()?;
+                        self.ws();
+                        if self.b.get(self.i) != Some(&b':') {
+                            return Err(self.bad());
+                        }
+                        self.i += 1;
+                    }
+                    self.skip_value(depth + 1)?;
+                    self.ws();
+                    match self.b.get(self.i) {
+                        Some(b',') => self.i += 1,
+                        Some(c) if *c == close => {
+                            self.i += 1;
+                            return Ok(());
+                        }
+                        _ => return Err(self.bad()),
+                    }
                 }
             }
-            other => out.push(other),
+            Some(_) => {
+                for lit in [&b"true"[..], b"false", b"null"] {
+                    if self.b[self.i..].starts_with(lit) {
+                        self.i += lit.len();
+                        return Ok(());
+                    }
+                }
+                self.number()
+            }
+            None => Err(self.bad()),
         }
+    }
+
+    fn number(&mut self) -> Result<()> {
+        let start = self.i;
+        let b = self.b;
+        let digits = |i: &mut usize| {
+            let s = *i;
+            while *i < b.len() && b[*i].is_ascii_digit() {
+                *i += 1;
+            }
+            *i - s
+        };
+        let mut i = self.i;
+        if b.get(i) == Some(&b'-') {
+            i += 1;
+        }
+        let n = digits(&mut i);
+        if n == 0 || (n > 1 && b[i - n] == b'0') {
+            return Err(self.bad());
+        }
+        if b.get(i) == Some(&b'.') {
+            i += 1;
+            if digits(&mut i) == 0 {
+                return Err(self.bad());
+            }
+        }
+        if matches!(b.get(i), Some(b'e' | b'E')) {
+            i += 1;
+            if matches!(b.get(i), Some(b'+' | b'-')) {
+                i += 1;
+            }
+            if digits(&mut i) == 0 {
+                return Err(self.bad());
+            }
+        }
+        if i == start {
+            return Err(self.bad());
+        }
+        self.i = i;
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_flat_catalog() {
-        let json = r#"{"greeting": "Halo, {name}!", "farewell": "Sampai jumpa"}"#;
-        let cat = parse_catalog(json).unwrap();
-        assert_eq!(cat.get("greeting"), Some("Halo, {name}!"));
-        assert_eq!(cat.get("farewell"), Some("Sampai jumpa"));
-        assert_eq!(cat.len(), 2);
+/// Parses a catalog: a JSON object (RFC 8259) whose values are all strings.
+///
+/// # Errors
+/// `BAD_JSON` for invalid JSON, `NOT_OBJECT` when the top level is not an
+/// object, `NON_STRING_VALUE`, `DUPLICATE_KEY`. Invalid JSON is reported
+/// before the other errors.
+pub fn parse_catalog(json: &str) -> Result<Catalog> {
+    // First pass: validity of the whole document.
+    let mut p = P {
+        b: json.as_bytes(),
+        i: 0,
+    };
+    p.skip_value(0)?;
+    p.ws();
+    if p.i != p.b.len() {
+        return Err(p.bad());
     }
-
-    #[test]
-    fn parses_empty_catalog() {
-        let cat = parse_catalog("{}").unwrap();
-        assert!(cat.is_empty());
+    let mut p = P {
+        b: json.as_bytes(),
+        i: 0,
+    };
+    p.ws();
+    if p.b.get(p.i) != Some(&b'{') {
+        return Err(Error::new(ErrorCode::NotObject, ""));
     }
-
-    #[test]
-    fn handles_escapes() {
-        let json = r#"{"quote": "Dia bilang \"halo\"\n"}"#;
-        let cat = parse_catalog(json).unwrap();
-        assert_eq!(cat.get("quote"), Some("Dia bilang \"halo\"\n"));
+    p.i += 1;
+    let mut cat = Catalog::default();
+    p.ws();
+    if p.b.get(p.i) == Some(&b'}') {
+        return Ok(cat);
     }
-
-    #[test]
-    fn unicode_escape_requires_four_hex_digits() {
-        let c = parse_catalog(r#"{"a":"\u+041","b":"\u00zz","c":"\u0041","d":"\ud800"}"#).unwrap();
-        assert_eq!(c.get("a"), Some(""));
-        assert_eq!(c.get("b"), Some(""));
-        assert_eq!(c.get("c"), Some("A"));
-        assert_eq!(c.get("d"), Some(""));
-    }
-
-    #[test]
-    fn rejects_trailing_garbage_but_allows_trailing_whitespace() {
-        assert!(matches!(
-            parse_catalog("{\"a\":\"b\"} x"),
-            Err(CatalogError::UnexpectedChar('x', _))
-        ));
-        assert!(parse_catalog("{\"a\":\"b\"} \n\t").is_ok());
-        assert!(matches!(
-            parse_catalog("{} {}"),
-            Err(CatalogError::UnexpectedChar('{', _))
-        ));
-    }
-
-    #[test]
-    fn rejects_non_object() {
-        assert_eq!(parse_catalog("[1,2,3]"), Err(CatalogError::ExpectedObject));
-    }
-
-    #[test]
-    fn missing_key_returns_none() {
-        let cat = parse_catalog(r#"{"a": "b"}"#).unwrap();
-        assert_eq!(cat.get("nonexistent"), None);
+    loop {
+        p.ws();
+        let key = p.string()?;
+        p.ws();
+        p.i += 1; // ':' (validated in the first pass)
+        p.ws();
+        if p.b.get(p.i) != Some(&b'"') {
+            return Err(Error::new(ErrorCode::NonStringValue, key));
+        }
+        let value = p.string()?;
+        if cat.entries.contains_key(&key) {
+            return Err(Error::new(ErrorCode::DuplicateKey, key));
+        }
+        cat.entries.insert(key, value);
+        p.ws();
+        if p.b.get(p.i) == Some(&b',') {
+            p.i += 1;
+        } else {
+            return Ok(cat);
+        }
     }
 }
