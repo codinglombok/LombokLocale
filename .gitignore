@@ -4,4 +4,7 @@
 node_modules/
 __pycache__/
 *.pyc
-/docs
+# Dokumen internal (ADR-024)
+/map
+/docs/*architecture*.*
+/docs/*masterplan*.*
