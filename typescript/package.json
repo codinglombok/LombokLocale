@@ -1,20 +1,63 @@
 {
   "name": "lomboklocale",
-  "version": "0.1.0",
-  "description": "Zero-dependency i18n: BCP-47 negotiation, CLDR plural/ordinal rules, MessageFormat 2-lite, number/date/currency formatting, message catalogs. Byte-identical with the Rust reference.",
-  "license": "Apache-2.0 OR MIT",
+  "version": "0.2.0",
+  "description": "BCP 47 negotiation, CLDR 47 plural rules, number/currency/date formatting and an ICU MessageFormat subset with identical results in TypeScript, Rust, Python, Go and PHP. No dependencies. Part of the Lombok Ecosystem.",
+  "keywords": [
+    "i18n",
+    "l10n",
+    "bcp47",
+    "cldr",
+    "plural",
+    "messageformat",
+    "number-format",
+    "date-format",
+    "currency",
+    "zero-dependency",
+    "lombok-ecosystem"
+  ],
+  "homepage": "https://github.com/codinglombok/LombokLocale",
+  "bugs": {
+    "url": "https://github.com/codinglombok/LombokLocale/issues"
+  },
+  "license": "(Apache-2.0 OR MIT) AND Unicode-3.0",
+  "author": "codinglombok",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codinglombok/LombokLocale.git",
+    "directory": "typescript"
+  },
   "type": "module",
-  "main": "./dist/src/index.js",
-  "types": "./dist/src/index.d.ts",
-  "exports": { ".": { "types": "./dist/src/index.d.ts", "import": "./dist/src/index.js" } },
-  "files": ["dist/src", "README.md"],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "README.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "LICENSE-UNICODE"
+  ],
   "sideEffects": false,
-  "engines": { "node": ">=18" },
-  "keywords": ["i18n", "l10n", "bcp47", "plural", "messageformat", "cldr"],
-  "repository": { "type": "git", "url": "git+https://github.com/codinglombok/LombokLocale.git", "directory": "typescript" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/vectors.test.js"
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build:test && cd build && node --test",
+    "coverage": "npm run build:test && node scripts/coverage.mjs build",
+    "lint": "tsc -p tsconfig.test.json --noEmit",
+    "prepublishOnly": "npm run build"
   },
-  "devDependencies": { "typescript": "^5.6.0", "@types/node": "^22.0.0" }
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
 }

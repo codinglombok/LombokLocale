@@ -1,313 +1,512 @@
-//! Minimal MessageFormat 2 runtime.
-//!
-//! Supports the subset the ecosystem actually needs (ARCHITECTURE §7):
-//! simple placeholders `{name}`, plural selection
-//! `{count, plural, one{...} other{...}}`, and generic selection
-//! `{gender, select, male{...} female{...} *{...}}`. Not a full MF2
-//! implementation (no functions, no nested declarations) — deliberately
-//! kept zero-dep and small enough to run in `no_std + alloc`.
+//! ICU MessageFormat subset (SPEC section 7).
 
+use crate::date::{format_date, DateStyle};
+use crate::decimal::{self, Dec};
+use crate::error::{Error, ErrorCode, Result};
+use crate::number::{format_number, NumberOptions};
 use crate::plural::{ordinal_category, plural_category};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ArgValue {
-    Str(String),
-    Int(i64),
-    UInt(u64),
-    Float(f64),
-}
-
-impl ArgValue {
-    fn to_display(&self) -> String {
-        match self {
-            ArgValue::Str(s) => s.clone(),
-            ArgValue::Int(i) => i.to_string(),
-            ArgValue::UInt(u) => u.to_string(),
-            ArgValue::Float(f) => f.to_string(),
-        }
-    }
-
-    fn as_u64(&self) -> Option<u64> {
-        match self {
-            ArgValue::UInt(u) => Some(*u),
-            ArgValue::Int(i) if *i >= 0 => Some(*i as u64),
-            ArgValue::Float(f) if *f >= 0.0 => Some(*f as u64),
-            _ => None,
-        }
-    }
-}
-
-/// A single named argument, as a (name, value) pair — kept as a `Vec`
-/// instead of a `HashMap` so the module works under `no_std + alloc`
-/// without pulling in `std::collections`.
-pub type Args<'a> = &'a [(&'a str, ArgValue)];
-
-fn lookup<'a>(args: Args<'a>, name: &str) -> Option<&'a ArgValue> {
-    args.iter().find(|(n, _)| *n == name).map(|(_, v)| v)
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MessageError {
-    UnbalancedBraces,
-    UnknownVariable(String),
-    MalformedSelector(String),
-    /// Pattern nesting exceeded [`MAX_DEPTH`].
-    TooDeep,
-}
-
-/// Maximum nesting of selectors inside a pattern.
+/// Maximum nesting of sub-messages.
 pub const MAX_DEPTH: usize = 16;
 
-/// Format `pattern` against `args` for `locale` (used for plural-category
-/// resolution).
-pub fn format(locale: &str, pattern: &str, args: Args) -> Result<String, MessageError> {
-    format_depth(locale, pattern, args, 0)
+/// A message argument: text, or a number as a decimal string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Arg {
+    Str(String),
+    Num(String),
 }
 
-fn format_depth(
-    locale: &str,
-    pattern: &str,
-    args: Args,
-    depth: usize,
-) -> Result<String, MessageError> {
-    if depth > MAX_DEPTH {
-        return Err(MessageError::TooDeep);
+impl Arg {
+    /// Text argument.
+    pub fn str(s: impl Into<String>) -> Self {
+        Self::Str(s.into())
     }
+
+    /// Number argument from a decimal string such as `"1.50"`.
+    pub fn num(s: impl Into<String>) -> Self {
+        Self::Num(s.into())
+    }
+}
+
+impl From<i64> for Arg {
+    fn from(v: i64) -> Self {
+        Self::Num(v.to_string())
+    }
+}
+
+impl From<u64> for Arg {
+    fn from(v: u64) -> Self {
+        Self::Num(v.to_string())
+    }
+}
+
+impl From<f64> for Arg {
+    /// NaN and infinities become `NaN`, `Infinity`, `-Infinity`; other values
+    /// use the shortest decimal that reads back as the same `f64`.
+    fn from(v: f64) -> Self {
+        Self::Num(if v.is_nan() {
+            "NaN".to_string()
+        } else if v.is_infinite() {
+            if v < 0.0 { "-Infinity" } else { "Infinity" }.to_string()
+        } else {
+            alloc::format!("{}", v)
+        })
+    }
+}
+
+impl From<&str> for Arg {
+    fn from(v: &str) -> Self {
+        Self::Str(v.to_string())
+    }
+}
+
+/// Named arguments.
+pub type Args<'a> = &'a [(&'a str, Arg)];
+
+#[derive(Debug)]
+enum Part {
+    Text(String),
+    Pound,
+    Simple(String),
+    Number(String, Option<String>),
+    Date(String, DateStyle),
+    Choice {
+        kind: Kind,
+        name: String,
+        offset: u64,
+        cases: Vec<(String, Vec<Part>)>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Plural,
+    Ordinal,
+    Select,
+}
+
+struct Parser<'a> {
+    s: &'a [char],
+    i: usize,
+}
+
+fn syntax(i: usize) -> Error {
+    Error::new(ErrorCode::Syntax, alloc::format!("{}", i))
+}
+
+fn is_name(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+impl Parser<'_> {
+    fn peek(&self) -> Option<char> {
+        self.s.get(self.i).copied()
+    }
+
+    fn message(&mut self, depth: usize, in_plural: bool, top: bool) -> Result<Vec<Part>> {
+        if depth > MAX_DEPTH {
+            return Err(Error::new(ErrorCode::TooDeep, ""));
+        }
+        let mut parts = Vec::new();
+        let mut buf = String::new();
+        while let Some(c) = self.peek() {
+            match c {
+                '\'' => {
+                    let next = self.s.get(self.i + 1).copied();
+                    if next == Some('\'') {
+                        buf.push('\'');
+                        self.i += 2;
+                    } else if matches!(next, Some('{' | '}' | '|'))
+                        || (next == Some('#') && in_plural)
+                    {
+                        self.i += 1;
+                        while let Some(q) = self.peek() {
+                            if q == '\'' {
+                                if self.s.get(self.i + 1) == Some(&'\'') {
+                                    buf.push('\'');
+                                    self.i += 2;
+                                    continue;
+                                }
+                                self.i += 1;
+                                break;
+                            }
+                            buf.push(q);
+                            self.i += 1;
+                        }
+                    } else {
+                        buf.push('\'');
+                        self.i += 1;
+                    }
+                }
+                '{' => {
+                    if !buf.is_empty() {
+                        parts.push(Part::Text(core::mem::take(&mut buf)));
+                    }
+                    self.i += 1;
+                    parts.push(self.argument(depth, in_plural)?);
+                }
+                '}' => {
+                    if top {
+                        return Err(syntax(self.i));
+                    }
+                    break;
+                }
+                '#' if in_plural => {
+                    if !buf.is_empty() {
+                        parts.push(Part::Text(core::mem::take(&mut buf)));
+                    }
+                    parts.push(Part::Pound);
+                    self.i += 1;
+                }
+                _ => {
+                    buf.push(c);
+                    self.i += 1;
+                }
+            }
+        }
+        if !buf.is_empty() {
+            parts.push(Part::Text(buf));
+        }
+        Ok(parts)
+    }
+
+    fn ws(&mut self) {
+        while matches!(self.peek(), Some(' ' | '\t' | '\r' | '\n')) {
+            self.i += 1;
+        }
+    }
+
+    fn word(&mut self) -> String {
+        self.ws();
+        let start = self.i;
+        while let Some(c) = self.peek() {
+            if matches!(c, ' ' | '\t' | '\r' | '\n' | ',' | '{' | '}') {
+                break;
+            }
+            self.i += 1;
+        }
+        self.s[start..self.i].iter().collect()
+    }
+
+    fn expect(&mut self, c: char) -> Result<()> {
+        self.ws();
+        if self.peek() != Some(c) {
+            return Err(syntax(self.i));
+        }
+        self.i += 1;
+        Ok(())
+    }
+
+    fn argument(&mut self, depth: usize, in_plural: bool) -> Result<Part> {
+        let name = self.word();
+        if !is_name(&name) {
+            return Err(syntax(self.i));
+        }
+        self.ws();
+        match self.peek() {
+            None => return Err(syntax(self.i)),
+            Some('}') => {
+                self.i += 1;
+                return Ok(Part::Simple(name));
+            }
+            _ => {}
+        }
+        self.expect(',')?;
+        let kind = self.word();
+        if kind == "number" || kind == "date" {
+            self.ws();
+            let mut style = None;
+            if self.peek() == Some(',') {
+                self.i += 1;
+                let st = self.word();
+                let ok = if kind == "number" {
+                    matches!(st.as_str(), "integer" | "percent")
+                } else {
+                    DateStyle::parse(&st).is_some()
+                };
+                if !ok {
+                    return Err(syntax(self.i));
+                }
+                style = Some(st);
+            }
+            self.expect('}')?;
+            return Ok(if kind == "number" {
+                Part::Number(name, style)
+            } else {
+                Part::Date(
+                    name,
+                    style
+                        .as_deref()
+                        .and_then(DateStyle::parse)
+                        .unwrap_or_default(),
+                )
+            });
+        }
+        let kind = match kind.as_str() {
+            "plural" => Kind::Plural,
+            "selectordinal" => Kind::Ordinal,
+            "select" => Kind::Select,
+            _ => return Err(syntax(self.i)),
+        };
+        self.expect(',')?;
+        let mut offset = 0u64;
+        let mut seen_offset = false;
+        let mut cases: Vec<(String, Vec<Part>)> = Vec::new();
+        loop {
+            self.ws();
+            match self.peek() {
+                None => return Err(syntax(self.i)),
+                Some('}') => {
+                    self.i += 1;
+                    break;
+                }
+                _ => {}
+            }
+            let key = self.word();
+            if let Some(rest) = key.strip_prefix("offset:") {
+                if kind == Kind::Plural && cases.is_empty() && !seen_offset {
+                    let rest = if rest.is_empty() {
+                        self.word()
+                    } else {
+                        rest.to_string()
+                    };
+                    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+                        return Err(syntax(self.i));
+                    }
+                    offset = rest.parse().map_err(|_| syntax(self.i))?;
+                    seen_offset = true;
+                    continue;
+                }
+            }
+            if key.is_empty() || cases.iter().any(|(k, _)| *k == key) {
+                return Err(syntax(self.i));
+            }
+            let valid = match kind {
+                Kind::Select => is_name(&key),
+                _ => match key.strip_prefix('=') {
+                    Some(v) => is_exact(v),
+                    None => matches!(
+                        key.as_str(),
+                        "zero" | "one" | "two" | "few" | "many" | "other"
+                    ),
+                },
+            };
+            if !valid {
+                return Err(syntax(self.i));
+            }
+            self.expect('{')?;
+            let body = self.message(depth + 1, kind != Kind::Select || in_plural, false)?;
+            if self.peek() != Some('}') {
+                return Err(syntax(self.i));
+            }
+            self.i += 1;
+            cases.push((key, body));
+        }
+        if !cases.iter().any(|(k, _)| k == "other") {
+            return Err(Error::new(ErrorCode::MissingOther, name));
+        }
+        Ok(Part::Choice {
+            kind,
+            name,
+            offset,
+            cases,
+        })
+    }
+}
+
+/// `digits[.digits]`
+fn is_exact(v: &str) -> bool {
+    let (a, b) = match v.split_once('.') {
+        Some((a, b)) => (a, Some(b)),
+        None => (v, None),
+    };
+    !a.is_empty()
+        && a.bytes().all(|c| c.is_ascii_digit())
+        && b.map_or(true, |b| {
+            !b.is_empty() && b.bytes().all(|c| c.is_ascii_digit())
+        })
+}
+
+fn lookup<'a>(args: Args<'a>, name: &str) -> Result<&'a Arg> {
+    args.iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| v)
+        .ok_or_else(|| Error::new(ErrorCode::MissingArgument, name))
+}
+
+fn finite(v: &str) -> Option<(bool, String, String)> {
+    match decimal::parse(v) {
+        Ok(Dec::Finite { neg, int, frac }) => Some((neg, int, frac)),
+        _ => None,
+    }
+}
+
+fn is_zero(int: &str, frac: &str) -> bool {
+    int == "0" && frac.bytes().all(|b| b == b'0')
+}
+
+fn dec_eq(a: &str, b: &str) -> bool {
+    match (finite(a), finite(b)) {
+        (Some((na, ia, fa)), Some((nb, ib, fb))) => {
+            if is_zero(&ia, &fa) && is_zero(&ib, &fb) {
+                return true;
+            }
+            na == nb && ia == ib && fa.trim_end_matches('0') == fb.trim_end_matches('0')
+        }
+        _ => false,
+    }
+}
+
+/// `value - offset` as a decimal string keeping the fraction digits; None
+/// when the value has more than 36 digits (SPEC section 7.4).
+fn dec_sub(value: &str, offset: u64) -> Option<String> {
+    if offset == 0 {
+        return Some(value.to_string());
+    }
+    let (neg, int, frac) = finite(value)?;
+    let scale = frac.len() as u32;
+    let digits = alloc::format!("{}{}", int, frac);
+    if digits.len() > 36 {
+        return None;
+    }
+    let mut n: i128 = digits.parse().ok()?;
+    if neg {
+        n = -n;
+    }
+    let n = n - i128::from(offset) * 10i128.pow(scale);
+    let mut s = alloc::format!("{}", n.unsigned_abs());
+    while s.len() < scale as usize + 1 {
+        s.insert(0, '0');
+    }
+    let (a, b) = s.split_at(s.len() - scale as usize);
     let mut out = String::new();
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '{' {
-            let (block, next) = read_block(&chars, i)?;
-            out.push_str(&render_block(locale, &block, args, depth)?);
-            i = next;
-        } else if c == '}' {
-            return Err(MessageError::UnbalancedBraces);
-        } else {
-            out.push(c);
-            i += 1;
-        }
+    if n < 0 {
+        out.push('-');
     }
-    Ok(out)
+    out.push_str(a);
+    if scale > 0 {
+        out.push('.');
+        out.push_str(b);
+    }
+    Some(out)
 }
 
-/// Read a balanced `{...}` block starting at `start` (which must be `{`).
-/// Returns the inner content and the index just past the closing `}`.
-fn read_block(chars: &[char], start: usize) -> Result<(String, usize), MessageError> {
-    let mut depth = 0i32;
-    let mut i = start;
-    let mut inner = String::new();
-    loop {
-        if i >= chars.len() {
-            return Err(MessageError::UnbalancedBraces);
-        }
-        let c = chars[i];
-        if c == '{' {
-            depth += 1;
-            if depth > 1 {
-                inner.push(c);
-            }
-        } else if c == '}' {
-            depth -= 1;
-            if depth == 0 {
-                return Ok((inner, i + 1));
-            }
-            inner.push(c);
-        } else {
-            inner.push(c);
-        }
-        i += 1;
+fn for_plural(value: &str) -> String {
+    let (_, int, frac) = finite(value).expect("checked finite");
+    let (ip, fp) = decimal::round(&int, &frac, 3);
+    let fp = fp.trim_end_matches('0');
+    if fp.is_empty() {
+        ip
+    } else {
+        alloc::format!("{}.{}", ip, fp)
     }
 }
 
-fn render_block(
+fn render(
     locale: &str,
-    inner: &str,
+    parts: &[Part],
     args: Args,
-    depth: usize,
-) -> Result<String, MessageError> {
-    let trimmed = inner.trim();
-    // Simple placeholder: {name}
-    if !trimmed.contains(',') {
-        let val = lookup(args, trimmed)
-            .ok_or_else(|| MessageError::UnknownVariable(trimmed.to_string()))?;
-        return Ok(val.to_display());
+    pound: Option<&str>,
+    out: &mut String,
+) -> Result<()> {
+    for part in parts {
+        match part {
+            Part::Text(t) => out.push_str(t),
+            Part::Pound => match pound {
+                Some(p) => out.push_str(&format_number(locale, p, &NumberOptions::decimal())?),
+                None => out.push('#'),
+            },
+            Part::Simple(name) => match lookup(args, name)? {
+                Arg::Str(s) => out.push_str(s),
+                Arg::Num(n) => out.push_str(
+                    &format_number(locale, n, &NumberOptions::decimal())
+                        .map_err(|_| Error::new(ErrorCode::BadArgument, name.clone()))?,
+                ),
+            },
+            Part::Number(name, style) => {
+                let Arg::Num(n) = lookup(args, name)? else {
+                    return Err(Error::new(ErrorCode::BadArgument, name.clone()));
+                };
+                let opts = match style.as_deref() {
+                    Some("integer") => NumberOptions::decimal().fraction(None, Some(0)),
+                    Some(_) => NumberOptions::percent(),
+                    None => NumberOptions::decimal(),
+                };
+                out.push_str(
+                    &format_number(locale, n, &opts)
+                        .map_err(|_| Error::new(ErrorCode::BadArgument, name.clone()))?,
+                );
+            }
+            Part::Date(name, style) => {
+                let Arg::Str(s) = lookup(args, name)? else {
+                    return Err(Error::new(ErrorCode::BadArgument, name.clone()));
+                };
+                out.push_str(
+                    &format_date(locale, s, *style)
+                        .map_err(|_| Error::new(ErrorCode::BadArgument, name.clone()))?,
+                );
+            }
+            Part::Choice {
+                kind,
+                name,
+                offset,
+                cases,
+            } => {
+                let arg = lookup(args, name)?;
+                let other = &cases.iter().find(|(k, _)| k == "other").expect("checked").1;
+                if *kind == Kind::Select {
+                    let key = match arg {
+                        Arg::Str(s) | Arg::Num(s) => s,
+                    };
+                    let chosen = cases.iter().find(|(k, _)| k == key).map_or(other, |c| &c.1);
+                    render(locale, chosen, args, pound, out)?;
+                    continue;
+                }
+                let Arg::Num(n) = arg else {
+                    return Err(Error::new(ErrorCode::BadArgument, name.clone()));
+                };
+                if finite(n).is_none() {
+                    return Err(Error::new(ErrorCode::BadArgument, name.clone()));
+                }
+                let shown = dec_sub(n, *offset)
+                    .ok_or_else(|| Error::new(ErrorCode::BadArgument, name.clone()))?;
+                let exact = cases
+                    .iter()
+                    .find(|(k, _)| k.strip_prefix('=').is_some_and(|v| dec_eq(v, n)));
+                let chosen = match exact {
+                    Some(c) => &c.1,
+                    None => {
+                        let v = for_plural(&shown);
+                        let cat = if *kind == Kind::Ordinal {
+                            ordinal_category(locale, &v)?
+                        } else {
+                            plural_category(locale, &v)?
+                        };
+                        cases
+                            .iter()
+                            .find(|(k, _)| k == cat.as_str())
+                            .map_or(other, |c| &c.1)
+                    }
+                };
+                render(locale, chosen, args, Some(&shown), out)?;
+            }
+        }
     }
-
-    // Selector: {var, plural, ...} or {var, select, ...}
-    let mut parts = trimmed.splitn(3, ',');
-    let var = parts.next().unwrap_or("").trim();
-    let kind = parts.next().unwrap_or("").trim();
-    let rest = parts.next().unwrap_or("");
-
-    let val = lookup(args, var).ok_or_else(|| MessageError::UnknownVariable(var.to_string()))?;
-
-    let cases = parse_cases(rest)?;
-
-    match kind {
-        "plural" => {
-            let n = val
-                .as_u64()
-                .ok_or_else(|| MessageError::MalformedSelector(var.to_string()))?;
-            let cat = plural_category(locale, n).as_str();
-            let chosen = cases
-                .iter()
-                .find(|(k, _)| k == cat)
-                .or_else(|| cases.iter().find(|(k, _)| k == "other"))
-                .or_else(|| cases.iter().find(|(k, _)| k == "*"))
-                .ok_or_else(|| MessageError::MalformedSelector(rest.to_string()))?;
-            // Support `#` as shorthand for the numeric value inside the case.
-            let rendered = format_depth(locale, &chosen.1, args, depth + 1)?;
-            Ok(rendered.replace('#', &n.to_string()))
-        }
-        "selectordinal" => {
-            let n = val
-                .as_u64()
-                .ok_or_else(|| MessageError::MalformedSelector(var.to_string()))?;
-            let cat = ordinal_category(locale, n).as_str();
-            let chosen = cases
-                .iter()
-                .find(|(k, _)| k == cat)
-                .or_else(|| cases.iter().find(|(k, _)| k == "other"))
-                .or_else(|| cases.iter().find(|(k, _)| k == "*"))
-                .ok_or_else(|| MessageError::MalformedSelector(rest.to_string()))?;
-            let rendered = format_depth(locale, &chosen.1, args, depth + 1)?;
-            Ok(rendered.replace('#', &n.to_string()))
-        }
-        "select" => {
-            let key = val.to_display();
-            let chosen = cases
-                .iter()
-                .find(|(k, _)| *k == key)
-                .or_else(|| cases.iter().find(|(k, _)| k == "*"))
-                .or_else(|| cases.iter().find(|(k, _)| k == "other"))
-                .ok_or_else(|| MessageError::MalformedSelector(rest.to_string()))?;
-            format_depth(locale, &chosen.1, args, depth + 1)
-        }
-        _ => Err(MessageError::MalformedSelector(kind.to_string())),
-    }
+    Ok(())
 }
 
-/// Parse `one{...} few{...} other{...}` into `(key, body)` pairs.
-fn parse_cases(s: &str) -> Result<Vec<(String, String)>, MessageError> {
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    let mut cases = Vec::new();
-    while i < chars.len() {
-        while i < chars.len() && chars[i].is_whitespace() {
-            i += 1;
-        }
-        if i >= chars.len() {
-            break;
-        }
-        let key_start = i;
-        while i < chars.len() && chars[i] != '{' {
-            i += 1;
-        }
-        let key: String = chars[key_start..i]
-            .iter()
-            .collect::<String>()
-            .trim()
-            .to_string();
-        if i >= chars.len() {
-            return Err(MessageError::UnbalancedBraces);
-        }
-        let (body, next) = read_block(&chars, i)?;
-        cases.push((key, body));
-        i = next;
-    }
-    Ok(cases)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn simple_placeholder() {
-        let args: [(&str, ArgValue); 1] = [("name", ArgValue::Str("Lombok".into()))];
-        let out = format("en", "Halo, {name}!", &args).unwrap();
-        assert_eq!(out, "Halo, Lombok!");
-    }
-
-    #[test]
-    fn plural_english() {
-        let pattern = "{count, plural, one{# file} other{# files}}";
-        let one: [(&str, ArgValue); 1] = [("count", ArgValue::UInt(1))];
-        let many: [(&str, ArgValue); 1] = [("count", ArgValue::UInt(5))];
-        assert_eq!(format("en", pattern, &one).unwrap(), "1 file");
-        assert_eq!(format("en", pattern, &many).unwrap(), "5 files");
-    }
-
-    #[test]
-    fn plural_indonesian_always_other() {
-        let pattern = "{count, plural, one{# berkas} other{# berkas}}";
-        let one: [(&str, ArgValue); 1] = [("count", ArgValue::UInt(1))];
-        assert_eq!(format("id", pattern, &one).unwrap(), "1 berkas");
-    }
-
-    #[test]
-    fn selectordinal_english() {
-        let p = "{n, selectordinal, one{#st} two{#nd} few{#rd} other{#th}}";
-        let f = |n: u64| format("en", p, &[("n", ArgValue::UInt(n))]).unwrap();
-        assert_eq!(
-            (f(1).as_str(), f(2).as_str(), f(3).as_str(), f(4).as_str()),
-            ("1st", "2nd", "3rd", "4th")
-        );
-        assert_eq!(
-            (f(11).as_str(), f(22).as_str(), f(103).as_str()),
-            ("11th", "22nd", "103rd")
-        );
-        assert_eq!(format("id", p, &[("n", ArgValue::UInt(1))]).unwrap(), "1th");
-    }
-
-    #[test]
-    fn select_gender() {
-        let pattern = "{gender, select, male{Dia (L)} female{Dia (P)} *{Dia}}";
-        let male: [(&str, ArgValue); 1] = [("gender", ArgValue::Str("male".into()))];
-        let other: [(&str, ArgValue); 1] = [("gender", ArgValue::Str("nonbinary".into()))];
-        assert_eq!(format("id", pattern, &male).unwrap(), "Dia (L)");
-        assert_eq!(format("id", pattern, &other).unwrap(), "Dia");
-    }
-
-    #[test]
-    fn nested_plural_with_prefix_suffix() {
-        let pattern = "Anda punya {count, plural, one{# pesan baru} other{# pesan baru}}.";
-        let args: [(&str, ArgValue); 1] = [("count", ArgValue::UInt(3))];
-        assert_eq!(
-            format("id", pattern, &args).unwrap(),
-            "Anda punya 3 pesan baru."
-        );
-    }
-
-    #[test]
-    fn deep_nesting_is_rejected_not_overflowed() {
-        let mut p = String::from("x");
-        for _ in 0..200 {
-            p = alloc::format!("{{n, select, *{{{}}}}}", p);
-        }
-        let r = format("en", &p, &[("n", ArgValue::UInt(1))]);
-        assert_eq!(r, Err(MessageError::TooDeep));
-    }
-
-    #[test]
-    fn unknown_variable_errors() {
-        let args: [(&str, ArgValue); 0] = [];
-        assert_eq!(
-            format("en", "Hi {name}", &args),
-            Err(MessageError::UnknownVariable("name".to_string()))
-        );
-    }
-
-    #[test]
-    fn unbalanced_braces_errors() {
-        let args: [(&str, ArgValue); 0] = [];
-        assert_eq!(
-            format("en", "Hi {name", &args),
-            Err(MessageError::UnbalancedBraces)
-        );
-    }
+/// Formats an ICU MessageFormat `pattern` with `args` for `locale`.
+///
+/// # Errors
+/// `SYNTAX`, `MISSING_OTHER`, `TOO_DEEP` for the pattern;
+/// `MISSING_ARGUMENT`, `BAD_ARGUMENT` for the arguments.
+pub fn format_message(locale: &str, pattern: &str, args: Args) -> Result<String> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut p = Parser { s: &chars, i: 0 };
+    let parts = p.message(0, false, true)?;
+    let mut out = String::new();
+    render(locale, &parts, args, None, &mut out)?;
+    Ok(out)
 }

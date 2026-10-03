@@ -1,201 +1,249 @@
-//! Number and currency formatting (CLDR-subset, §7 of ARCHITECTURE_UTAMA).
-//!
-//! Deliberately covers grouping + decimal separator conventions rather
-//! than the full CLDR number-pattern grammar, matching the "CLDR subset"
-//! scope called out in the architecture doc.
+//! Number, percent and currency formatting (SPEC section 5).
 
+use crate::decimal::{self, Dec};
+use crate::error::{Error, ErrorCode, Result};
+use crate::tables::LocaleData;
+use crate::tag::locale_data;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 
-/// Grouping/decimal separator convention for a locale's base language.
-struct NumberFormat {
-    group_sep: char,
-    decimal_sep: char,
+/// Formatting style.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Style {
+    /// Plain decimal number (0 to 3 fraction digits by default).
+    #[default]
+    Decimal,
+    /// Percent; the value is multiplied by 100 (0 fraction digits by default).
+    Percent,
+    /// Currency with the ISO 4217 code (its CLDR fraction digits by default).
+    Currency(String),
 }
 
-fn number_format_for(locale: &str) -> NumberFormat {
-    let lang = locale.split(['-', '_']).next().unwrap_or(locale);
-    match lang {
-        // Comma-thousands, dot-decimal.
-        "en" | "zh" | "ja" | "ko" => NumberFormat {
-            group_sep: ',',
-            decimal_sep: '.',
-        },
-        // Dot-thousands, comma-decimal (most of Europe + Indonesia).
-        "id" | "de" | "nl" | "it" | "es" | "pt" | "ru" | "tr" | "vi" => NumberFormat {
-            group_sep: '.',
-            decimal_sep: ',',
-        },
-        // Space-thousands, comma-decimal.
-        "fr" | "sv" | "pl" | "fi" => NumberFormat {
-            group_sep: '\u{00A0}', // non-breaking space
-            decimal_sep: ',',
-        },
-        _ => NumberFormat {
-            group_sep: ',',
-            decimal_sep: '.',
-        },
+/// Options of [`format_number`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NumberOptions {
+    pub style: Style,
+    /// Minimum fraction digits, 0..=20.
+    pub min_fraction: Option<u8>,
+    /// Maximum fraction digits, 0..=20.
+    pub max_fraction: Option<u8>,
+}
+
+impl NumberOptions {
+    /// Decimal style with default digits.
+    pub fn decimal() -> Self {
+        Self::default()
     }
-}
 
-/// Format an integer with locale-appropriate grouping.
-pub fn format_integer(value: i64, locale: &str) -> String {
-    let fmt = number_format_for(locale);
-    let neg = value < 0;
-    let digits = if value == i64::MIN {
-        // Avoid overflow on abs(); i64::MIN has no positive counterpart.
-        "9223372036854775808".to_string()
-    } else {
-        value.unsigned_abs().to_string()
-    };
-    let grouped = group_digits(&digits, fmt.group_sep);
-    if neg {
-        alloc::format!("-{}", grouped)
-    } else {
-        grouped
-    }
-}
-
-fn group_digits(digits: &str, sep: char) -> String {
-    let bytes: Vec<char> = digits.chars().collect();
-    let mut out = String::new();
-    let len = bytes.len();
-    for (i, c) in bytes.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
-            out.push(sep);
+    /// Percent style with default digits.
+    pub fn percent() -> Self {
+        Self {
+            style: Style::Percent,
+            ..Self::default()
         }
-        out.push(*c);
     }
-    out
+
+    /// Currency style with default digits.
+    pub fn currency(code: &str) -> Self {
+        Self {
+            style: Style::Currency(code.to_string()),
+            ..Self::default()
+        }
+    }
+
+    /// Sets the fraction digit range.
+    pub fn fraction(mut self, min: Option<u8>, max: Option<u8>) -> Self {
+        self.min_fraction = min;
+        self.max_fraction = max;
+        self
+    }
 }
 
-/// Maximum fraction digits honoured by [`format_float`] (f64 carries ~15-17
-/// significant digits; more would be noise and could overflow the fixed-point
-/// scale).
-pub const MAX_DECIMALS: usize = 15;
-
-/// Magnitude above which fixed-point formatting is abandoned for scientific
-/// notation (keeps `|value| * 10^decimals` inside `i128`).
-const FIXED_LIMIT: f64 = 1e20;
-
-/// Format a floating point value with `decimals` fraction digits (clamped to
-/// [`MAX_DECIMALS`]) and locale-appropriate grouping/decimal separators.
-/// `NaN` -> `"NaN"`, infinities -> `"∞"`/`"-∞"`, magnitudes >= 1e20 use
-/// scientific notation (`1e30`), and negative values that round to zero print
-/// as `0` (no `-0`).
-pub fn format_float(value: f64, decimals: usize, locale: &str) -> String {
-    if value.is_nan() {
-        return "NaN".to_string();
+/// Splits one subpattern into (prefix, number part, suffix).
+fn split_pattern(p: &str) -> (&str, &str, &str) {
+    let mut quoted = false;
+    let (mut start, mut end) = (None, 0);
+    for (i, c) in p.char_indices() {
+        if c == '\'' {
+            quoted = !quoted;
+        } else if !quoted && matches!(c, '#' | '0' | ',' | '.') {
+            if start.is_none() {
+                start = Some(i);
+            }
+            end = i + 1;
+        }
     }
-    if value.is_infinite() {
-        return if value < 0.0 { "-\u{221E}" } else { "\u{221E}" }.to_string();
-    }
-    let fmt = number_format_for(locale);
-    let decimals = decimals.min(MAX_DECIMALS);
-    let abs = if value < 0.0 { -value } else { value };
-    if abs >= FIXED_LIMIT {
-        return alloc::format!("{:e}", value);
-    }
+    let start = start.unwrap_or(p.len());
+    (&p[..start], &p[start..end.max(start)], &p[end.max(start)..])
+}
 
-    let mut scale: i128 = 1;
-    for _ in 0..decimals {
-        scale *= 10;
-    }
-    let scaled = (abs * (scale as f64) + 0.5) as i128; // half-up on |value|
-    let int_part = scaled / scale;
-    let frac_part = scaled - int_part * scale;
-    let neg = value < 0.0 && scaled != 0;
+fn grouping(numpart: &str) -> (usize, usize) {
+    let ip = numpart.split('.').next().unwrap_or("");
+    let groups: alloc::vec::Vec<&str> = ip.split(',').collect();
+    let primary = if groups.len() > 1 {
+        groups[groups.len() - 1].len()
+    } else {
+        0
+    };
+    let secondary = if groups.len() > 2 {
+        groups[groups.len() - 2].len()
+    } else {
+        primary
+    };
+    (primary, secondary)
+}
 
+fn group_int(ip: &str, primary: usize, secondary: usize, min_grouping: usize, sep: &str) -> String {
+    if primary == 0 || ip.len() < primary + min_grouping {
+        return ip.to_string();
+    }
+    let (mut head, tail) = ip.split_at(ip.len() - primary);
+    let mut parts = alloc::vec![tail];
+    while head.len() > secondary {
+        let (h, t) = head.split_at(head.len() - secondary);
+        parts.insert(0, t);
+        head = h;
+    }
+    if !head.is_empty() {
+        parts.insert(0, head);
+    }
+    parts.join(sep)
+}
+
+fn expand_affix(raw: &str, d: &LocaleData, symbol: &str) -> String {
     let mut out = String::new();
-    if neg {
-        out.push('-');
-    }
-    out.push_str(&group_digits(&int_part.to_string(), fmt.group_sep));
-    if decimals > 0 {
-        out.push(fmt.decimal_sep);
-        out.push_str(&alloc::format!("{:0width$}", frac_part, width = decimals));
+    let mut quoted = false;
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            if chars.peek() == Some(&'\'') {
+                chars.next();
+                out.push('\'');
+                continue;
+            }
+            quoted = !quoted;
+        } else if quoted {
+            out.push(c);
+        } else {
+            match c {
+                '¤' => out.push_str(symbol),
+                '%' => out.push_str(d.percent),
+                '-' => out.push_str(d.minus),
+                _ => out.push(c),
+            }
+        }
     }
     out
 }
 
-/// Format a minor-unit-free currency amount, e.g. `format_currency(1234.5, "IDR", "id")`
-/// -> `"Rp1.234,50"`. Symbol table covers a small common set; unknown codes
-/// fall back to `"<CODE> <amount>"`.
-pub fn format_currency(value: f64, currency_code: &str, locale: &str) -> String {
-    let amount = format_float(value, 2, locale);
-    let symbol = currency_symbol(currency_code);
-    let lang = locale.split(['-', '_']).next().unwrap_or(locale);
-    match lang {
-        "en" => alloc::format!("{}{}", symbol, amount),
-        "id" => alloc::format!("{}{}", symbol, amount),
-        "fr" | "sv" | "pl" | "fi" => alloc::format!("{}\u{00A0}{}", amount, symbol),
-        _ => alloc::format!("{} {}", symbol, amount),
-    }
+fn currency_digits(code: &str) -> usize {
+    crate::data::CURRENCY_DIGITS
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map_or(2, |(_, d)| usize::from(*d))
 }
 
-fn currency_symbol(code: &str) -> &'static str {
-    match code {
-        "USD" => "$",
-        "IDR" => "Rp",
-        "EUR" => "\u{20AC}",
-        "GBP" => "\u{00A3}",
-        "JPY" => "\u{00A5}",
-        "CNY" => "\u{00A5}",
-        _ => "",
+/// Formats `value` (a decimal string, `NaN`, `Infinity` or `-Infinity`) for
+/// `locale`. Rounding is half away from zero; grouping follows the locale
+/// pattern and minimum grouping digits.
+///
+/// # Errors
+/// `BAD_NUMBER` for unreadable values, `BAD_OPTION` for a missing or
+/// malformed currency code or an invalid fraction digit range.
+pub fn format_number(locale: &str, value: &str, opts: &NumberOptions) -> Result<String> {
+    let d = locale_data(locale);
+    let mut code = String::new();
+    let (dmin, dmax, pattern) = match &opts.style {
+        Style::Decimal => (0, 3, d.decimal_pattern),
+        Style::Percent => (0, 0, d.percent_pattern),
+        Style::Currency(c) => {
+            if c.len() != 3 || !c.bytes().all(|b| b.is_ascii_alphabetic()) {
+                return Err(Error::new(ErrorCode::BadOption, "currency"));
+            }
+            code = c.to_ascii_uppercase();
+            let digits = currency_digits(&code);
+            (digits, digits, d.currency_pattern)
+        }
+    };
+    let (minf, maxf) = match (
+        opts.min_fraction.map(usize::from),
+        opts.max_fraction.map(usize::from),
+    ) {
+        (None, None) => (dmin, dmax),
+        (Some(a), None) => (a, a.max(dmax)),
+        (None, Some(b)) => (dmin.min(b), b),
+        (Some(a), Some(b)) => (a, b),
+    };
+    if minf > 20 || maxf > 20 || minf > maxf {
+        return Err(Error::new(ErrorCode::BadOption, "fractionDigits"));
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn integer_grouping_en() {
-        assert_eq!(format_integer(1234567, "en"), "1,234,567");
+    let (pos, negp) = match pattern.split_once(';') {
+        Some((p, n)) => (p, Some(n)),
+        None => (pattern, None),
+    };
+    let (prefix, numpart, suffix) = split_pattern(pos);
+    let (neg, body) = match decimal::parse(value)? {
+        Dec::NaN => (false, d.nan.to_string()),
+        Dec::Inf { neg } => (neg, d.infinity.to_string()),
+        Dec::Finite {
+            neg,
+            mut int,
+            mut frac,
+        } => {
+            if opts.style == Style::Percent {
+                frac.push_str("00");
+                let shifted = alloc::format!("{}{}", int, &frac[..2]);
+                let t = shifted.trim_start_matches('0');
+                int = if t.is_empty() {
+                    "0".to_string()
+                } else {
+                    t.to_string()
+                };
+                frac = frac[2..].to_string();
+            }
+            let (ip, mut fp) = decimal::round(&int, &frac, maxf);
+            while fp.len() < minf {
+                fp.push('0');
+            }
+            while fp.len() > minf && fp.ends_with('0') {
+                fp.pop();
+            }
+            let (primary, secondary) = grouping(numpart);
+            let mut body = group_int(&ip, primary, secondary, d.min_grouping, d.group);
+            if !fp.is_empty() {
+                body.push_str(d.decimal);
+                body.push_str(&fp);
+            }
+            (neg, body)
+        }
+    };
+    let (np, ns) = match (neg, negp) {
+        (true, Some(n)) => {
+            let (a, _, b) = split_pattern(n);
+            (a.to_string(), b.to_string())
+        }
+        (true, None) => (alloc::format!("-{}", prefix), suffix.to_string()),
+        (false, _) => (prefix.to_string(), suffix.to_string()),
+    };
+    if let Style::Currency(_) = opts.style {
+        let entry = d.currency_symbols.iter().find(|(c, ..)| *c == code);
+        let (sym, first_sz, last_sz) =
+            entry.map_or((code.as_str(), false, false), |e| (e.1, e.2, e.3));
+        let mut pre = expand_affix(&np, d, sym);
+        let mut suf = expand_affix(&ns, d, sym);
+        let starts_digit = body.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let ends_digit = body.chars().last().is_some_and(|c| c.is_ascii_digit());
+        if np.ends_with('¤') && !last_sz && starts_digit {
+            pre.push('\u{a0}');
+        }
+        if ns.starts_with('¤') && !first_sz && ends_digit {
+            suf.insert(0, '\u{a0}');
+        }
+        return Ok(alloc::format!("{}{}{}", pre, body, suf));
     }
-
-    #[test]
-    fn integer_grouping_id() {
-        assert_eq!(format_integer(1234567, "id"), "1.234.567");
-    }
-
-    #[test]
-    fn negative_integer() {
-        assert_eq!(format_integer(-9999, "en"), "-9,999");
-    }
-
-    #[test]
-    fn float_formatting_id() {
-        assert_eq!(format_float(1234.5, 2, "id"), "1.234,50");
-    }
-
-    #[test]
-    fn float_formatting_en() {
-        assert_eq!(format_float(1234.5, 2, "en"), "1,234.50");
-    }
-
-    #[test]
-    fn float_edge_cases_never_panic() {
-        assert_eq!(format_float(f64::NAN, 2, "en"), "NaN");
-        assert_eq!(format_float(f64::INFINITY, 2, "en"), "\u{221E}");
-        assert_eq!(format_float(f64::NEG_INFINITY, 2, "id"), "-\u{221E}");
-        assert_eq!(format_float(-0.004, 2, "en"), "0.00");
-        assert_eq!(format_float(-0.005, 2, "en"), "-0.01");
-        assert_eq!(format_float(1e30, 2, "en"), "1e30");
-        assert_eq!(format_float(f64::MAX, 2, "en"), format!("{:e}", f64::MAX));
-        // decimals is clamped instead of overflowing the fixed-point scale
-        assert_eq!(format_float(1.0, 40, "en").len(), 2 + MAX_DECIMALS);
-        assert_eq!(format_float(0.0, 0, "en"), "0");
-        assert_eq!(format_float(999.995, 2, "en"), "1,000.00");
-    }
-
-    #[test]
-    fn currency_idr() {
-        assert_eq!(format_currency(15000.0, "IDR", "id"), "Rp15.000,00");
-    }
-
-    #[test]
-    fn currency_usd() {
-        assert_eq!(format_currency(1999.99, "USD", "en"), "$1,999.99");
-    }
+    Ok(alloc::format!(
+        "{}{}{}",
+        expand_affix(&np, d, ""),
+        body,
+        expand_affix(&ns, d, "")
+    ))
 }

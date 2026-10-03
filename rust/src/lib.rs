@@ -1,95 +1,67 @@
-//! LombokLocale — zero-dependency i18n core (L0).
+//! LombokLocale: BCP 47 tags and negotiation, CLDR 47 plural rules,
+//! number/percent/currency and date formatting, an ICU MessageFormat subset,
+//! and JSON message catalogs. The same input gives the same output in Rust,
+//! TypeScript, Python, Go and PHP (see `docs/SPEC_LombokLocale_v0.2.0.md`).
 //!
-//! Implements ARCHITECTURE_UTAMA_v3.3 §7: BCP-47 negotiation, a CLDR
-//! plural-rule subset, a MessageFormat 2-lite runtime, and locale-aware
-//! number/date/currency formatting, backed by flat JSON message catalogs
-//! (`locales/<bcp47>/<repo>.json`).
-//!
-//! `no_std + alloc` by default; enable the `std` feature (on by default
-//! via Cargo.toml) for convenience re-exports where relevant. No
-//! mandatory dependency on any other Lombok library — L0 per ADR-016's
-//! sibling rule that L0 repos carry zero mandatory Lombok deps.
-
+//! `no_std` + `alloc` without the default `std` feature. No dependencies.
 #![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 
 extern crate alloc;
 
-pub mod bcp47;
-pub mod catalog;
-pub mod date;
-pub mod message;
-pub mod number;
+mod catalog;
+#[rustfmt::skip]
+mod data;
+mod date;
+mod decimal;
+mod error;
+mod message;
+mod number;
+mod plural;
+mod tables;
+mod tag;
 
-pub use bcp47::{negotiate, parse_bcp47, LocaleError, LocaleTag};
-pub use catalog::{parse_catalog, Catalog, CatalogError};
-pub use date::{format_date, parse_iso_date, DateStyle, SimpleDate};
-pub use message::{format as format_message, ArgValue, MessageError};
-pub use number::{format_currency, format_float, format_integer, MAX_DECIMALS};
+pub use catalog::{parse_catalog, Catalog};
+pub use date::{format_date, Date, DateStyle};
+pub use error::{Error, ErrorCode, Result};
+pub use message::{format_message, Arg, Args, MAX_DEPTH};
+pub use number::{format_number, NumberOptions, Style};
 pub use plural::{ordinal_category, plural_category, PluralCategory};
+pub use tag::{canonicalize, data_locale, negotiate, parse_tag, LanguageTag};
 
-pub mod plural;
+/// CLDR release of the embedded data.
+pub const CLDR_VERSION: &str = data::CLDR_VERSION;
+/// Largest exponent magnitude accepted in decimal strings.
+pub const MAX_EXPONENT: i64 = decimal::MAX_EXPONENT;
 
-/// A translated, catalog-backed message. Carries both the stable `code`
-/// (the contract other repos match against) and the `message_id` used to
-/// look up localized text — matching the "error membawa `code` (kontrak)
-/// dan `messageId` (terjemahan)" convention in ARCHITECTURE_UTAMA §7.
-#[derive(Debug, Clone, PartialEq)]
+/// A catalog-backed message: the stable `code` callers match on, the
+/// `message_id` used for lookup, and the text shown to the user.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalizedMessage {
     pub code: alloc::string::String,
     pub message_id: alloc::string::String,
     pub text: alloc::string::String,
+    /// True when the id was missing or its pattern failed; `text` is then `!!id!!`.
+    pub fallback: bool,
 }
 
-/// Resolve `message_id` from `catalog`, formatting it with `args`. Falls
-/// back to the raw `message_id` (wrapped in `!! !!`) if the catalog has no
-/// entry, so a missing translation is visibly wrong rather than silently
-/// blank in the UI.
+/// Looks up `message_id` in `catalog` and formats it. A missing id or a
+/// pattern that fails to format yields `!!message_id!!` with `fallback` set,
+/// so a missing translation is visible instead of blank.
 pub fn resolve(
     locale: &str,
     catalog: &Catalog,
     code: &str,
     message_id: &str,
-    args: message::Args,
+    args: Args,
 ) -> LocalizedMessage {
-    let pattern = catalog.get(message_id);
-    let text = match pattern {
-        Some(p) => message::format(locale, p, args)
-            .unwrap_or_else(|_| alloc::format!("!!{}!!", message_id)),
-        None => alloc::format!("!!{}!!", message_id),
-    };
+    let text = catalog
+        .get(message_id)
+        .and_then(|p| format_message(locale, p, args).ok());
     LocalizedMessage {
         code: code.into(),
         message_id: message_id.into(),
-        text,
-    }
-}
-
-#[cfg(test)]
-mod integration_tests {
-    use super::*;
-
-    #[test]
-    fn end_to_end_catalog_and_message() {
-        let json = r#"{"validator.too_short": "Minimal {min} karakter"}"#;
-        let cat = parse_catalog(json).unwrap();
-        let args: [(&str, ArgValue); 1] = [("min", ArgValue::UInt(8))];
-        let msg = resolve("id", &cat, "TOO_SHORT", "validator.too_short", &args);
-        assert_eq!(msg.text, "Minimal 8 karakter");
-        assert_eq!(msg.code, "TOO_SHORT");
-    }
-
-    #[test]
-    fn missing_message_id_is_visibly_marked() {
-        let cat = Catalog::default();
-        let args: [(&str, ArgValue); 0] = [];
-        let msg = resolve("id", &cat, "X", "nonexistent.id", &args);
-        assert_eq!(msg.text, "!!nonexistent.id!!");
-    }
-
-    #[test]
-    fn negotiate_then_load_catalog() {
-        let available = ["en", "id"];
-        let picked = negotiate(&["id-ID", "en"], &available, "en");
-        assert_eq!(picked, "id");
+        fallback: text.is_none(),
+        text: text.unwrap_or_else(|| alloc::format!("!!{}!!", message_id)),
     }
 }

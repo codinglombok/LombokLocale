@@ -1,63 +1,93 @@
 # LombokLocale
 
-Zero-dependency i18n core: BCP-47 negotiation, CLDR plural/ordinal rules, a MessageFormat 2-lite runtime, locale-aware number/date/currency formatting, and message catalogs.
+> BCP 47 tags and negotiation, CLDR 47 plural rules, number/percent/currency and date formatting, an ICU MessageFormat subset, and JSON message catalogs. The same input gives the same text in Rust, TypeScript, Python, Go and PHP. No runtime dependencies.
 
-A standalone, general-purpose library of the **Lombok Ecosystem** — Tier **L0**. No mandatory dependency on any other Lombok library (L0).
+[![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
+[![CI](https://github.com/codinglombok/LombokLocale/actions/workflows/ci.yml/badge.svg)](https://github.com/codinglombok/LombokLocale/actions/workflows/ci.yml)
+[![Vectors](https://img.shields.io/badge/shared%20vectors-342%20x%205%20ports-success)](vectors/)
+[![CLDR](https://img.shields.io/badge/CLDR-47.0-informational)](data/)
+[![Lombok Ecosystem](https://img.shields.io/badge/Lombok-Ecosystem-2e7d5b?logo=github)](https://github.com/codinglombok)
 
-> **Universal by design.** Usable by anyone — from small embedded devices to premium industrial software — without any application or framework. It is not part of, and not owned by, any app or server (e.g. RAG stacks); apps are merely example users. 
+Part of the [Lombok Ecosystem](https://github.com/codinglombok).
 
-## Status
+## Mengapa library ini? (Why this library?)
 
-🔵 **v0.1.0 — not yet published** to GitHub/registries. Rust reference + **TypeScript port** both pass the same shared test vectors (`vectors/lomboklocale-vectors-v1.json`, byte-identical behaviour per ADR-015). Python/Go/PHP ports are stubs. Plural rules are hand-written from CLDR; the CLDR release they track is not yet pinned (see docs).
+- **The same text everywhere.** `Intl` in browsers, ICU in PHP, Babel in Python and hand-written code in Go each ship a different CLDR version and different defaults, so an invoice total or a "3 files" message can differ between your frontend and backend. LombokLocale pins CLDR 47 and runs 342 shared cases ([SPEC](docs/SPEC_LombokLocale_v0.2.0.md)) in CI for every port.
+- **Checked against ICU.** Number, currency, percent, date and plural results are cross-checked against ICU 77.1; the four known differences are listed in the SPEC.
+- **Exact decimals.** Numbers are taken as decimal text, so `0.1 + 0.2`, `1e21` or a 30-digit amount are rounded exactly (half away from zero), never through binary floating point.
+- **Small and embeddable.** No dependencies; the Rust crate is `no_std` + `alloc`; data for 28 locales and plural rules for all CLDR locales are embedded.
 
-## Features
+## Installation
 
-- **BCP-47** parse + RFC 4647 negotiation (`zh-Hant-TW` → `zh-Hant` → `zh-TW` → `zh`)
-- **CLDR plural (cardinal) and ordinal rules** (subset): en/Germanic, fr/pt, ru/Slavic, ar (6 categories), cy, no-plural languages (`id`, `ja`, `zh`, …)
-- **MessageFormat 2-lite**: `{name}`, `{n, plural, …}`, `{n, selectordinal, …}`, `{v, select, …}`, `#`; nesting depth capped
-- **Number / currency / date** formatting per locale; `NaN`/∞/huge values handled; strict ISO dates (leap years honoured)
-- **Message catalogs** `locales/<bcp47>/<repo>.json` (strict flat JSON) + `resolve()` with the `code` + `messageId` contract; 10 catalogs (en, id + 8 draft machine translations — see `locales/STATUS.md`)
-- `no_std + alloc` core, zero dependencies
+| Language | Package | Status |
+|---|---|---|
+| Rust | `lomboklocale` (crates.io) | not yet published |
+| TypeScript / JavaScript | `lomboklocale` (npm) | not yet published |
+| Python | `lomboklocale` (PyPI) | not yet published |
+| Go | `github.com/codinglombok/lomboklocale/go` | tag `go/v0.2.0` on release |
+| PHP | `codinglombok/lomboklocale` (Packagist) | needs a split repository first |
 
-## Quick Start
+## Quick start
 
-### Rust (reference)
+```ts
+import { formatNumber, formatDate, formatMessage, negotiate, pluralCategory } from 'lomboklocale';
 
-```toml
-[dependencies]
-lomboklocale = { git = "https://github.com/codinglombok/LombokLocale", package = "lomboklocale" }   # not on crates.io yet
+negotiate(['id-ID', 'en'], ['en', 'id'], 'en');                         // "id"
+formatNumber('id', 1234567.891);                                        // "1.234.567,891"
+formatNumber('de', '15000', { style: 'currency', currency: 'EUR' });    // "15.000,00 €"
+formatNumber('hi', '1234567.5');                                        // "12,34,567.5"
+formatDate('id', '2026-10-02', 'full');                                 // "Jumat, 02 Oktober 2026"
+pluralCategory('pl', 21);                                               // "many"
+formatMessage('en', '{n, plural, one{# file} other{# files}}', { n: 1234 });   // "1,234 files"
+formatMessage('en', '{n, selectordinal, one{#st} two{#nd} few{#rd} other{#th}}', { n: 23 }); // "23rd"
 ```
 
 ```rust
-use lomboklocale::*;
-negotiate(&["id-ID", "en"], &["en", "id"], "en");                          // "id"
-let args = [("n", ArgValue::UInt(2))];
-format_message("en", "{n, selectordinal, one{#st} two{#nd} few{#rd} other{#th}}", &args).unwrap(); // "2nd"
-format_currency(15000.0, "IDR", "id");                                      // "Rp15.000,00"
-let cat = parse_catalog(r#"{"hi": "Halo, {name}!"}"#).unwrap();
-resolve("id", &cat, "GREET", "hi", &[("name", ArgValue::Str("Bali".into()))]).text; // "Halo, Bali!"
+use lomboklocale::{format_message, format_number, Arg, NumberOptions};
+
+format_number("id", "15000", &NumberOptions::currency("IDR"))?;     // "Rp 15.000,00"
+format_message("id", "Total {n}", &[("n", Arg::from(1234567.5))])?; // "Total 1.234.567,5"
 ```
 
-### TypeScript
+```python
+from lomboklocale import format_date, format_number, Num
+
+format_number("fr", 1234.5, style="currency", currency="EUR")   # "1 234,50 €"
+format_date("ja", "2026-10-02", "full")                          # "2026年10月2日金曜日"
+```
+
+```go
+s, err := lomboklocale.FormatNumber("en", "0.256", lomboklocale.NumberOptions{Style: "percent"}) // "26%"
+```
+
+```php
+use LombokLocale\Locale;
+
+Locale::formatNumber('ko', 15000, 'currency', 'KRW');   // "₩15,000"
+```
+
+Spaces shown above inside amounts are U+00A0 or U+202F, as CLDR specifies.
+
+## Message catalogs
+
+`locales/<tag>/lomboklocale.json` holds the messages of this library itself; `en` and `id` are reviewed, the others are machine-translated drafts awaiting native review (see `locales/STATUS.md`). Any application can use the same format: `parse_catalog` reads a strict JSON object of strings, and `resolve` formats one message or returns `!!id!!` so a missing translation is visible.
+
+## Known limitations
+
+Latin digits and the Gregorian calendar only; number/date data for 28 locales (other locales fall back to `en` for formatting but use their own plural rules); no time-of-day, time zones, relative time, lists, units, compact or scientific notation; MessageFormat is a subset (no `choice`, `spellout`, `ordinal` styles, no MessageFormat 2 syntax). See [docs/full_summary_project_LombokLocale_v0.2.0.md](docs/full_summary_project_LombokLocale_v0.2.0.md).
+
+## Development
 
 ```bash
-cd typescript && npm install && npm test     # builds, then runs every shared vector
+python3 scripts/gen_ports.py --check && python3 vectors/build_vectors.py && node vectors/check_icu.mjs
+cd rust && cargo test && cargo clippy --all-targets -- -D warnings
+cd typescript && npm ci && npm run coverage
+cd python && python -m pytest
+cd go && go test ./...
+cd php && php tests/run.php
+bash scripts/lombok-doctor.sh LombokLocale
 ```
-
-Zero runtime dependencies, ESM, Node ≥ 18. See `docs/API_LombokLocale_v0.1.0.md` for the camelCase API.
-
-## Testing
-
-```bash
-cd rust && cargo test --release                       # unit + robustness (pseudo-fuzz) + shared vectors
-cd rust && cargo build --no-default-features          # no_std + alloc proof
-cd typescript && npm test                             # same vectors, TypeScript port
-LOMBOK_REGEN=1 cargo test --release --test vectors    # regenerate expected outputs from the Rust reference (review the diff!)
-./scripts/lombok-doctor-docs.sh LombokLocale                # 12 docs, versions, vector hash, license, no ownership claims
-```
-
-Vector inputs are authored in `vectors/gen_inputs.py` (deterministic); expected outputs come from the Rust reference and are reviewed by hand and, where possible, by independent checks. Changing any vector requires updating its SHA-256 in `docs/SPEC_LombokLocale_v0.1.0.md` (CI enforces it).
 
 ## License
 
-Dual-licensed under **Apache-2.0 OR MIT**, at your option — see [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT).
+Code: Apache-2.0 OR MIT, at your option ([LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT)). Embedded CLDR data: Unicode License v3 ([LICENSE-UNICODE](LICENSE-UNICODE)).
