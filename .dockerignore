@@ -1,0 +1,49 @@
+# Build-context hygiene for `docker build .` (kept in lockstep with
+# .gitignore and ADR-024: internal ecosystem documents never leave the
+# machine, and the context stays small).
+
+# VCS and CI
+.git/
+.github/
+
+# Language build artifacts and dependency trees
+**/node_modules/
+**/target/
+typescript/build/
+typescript/dist/
+typescript/*.tgz
+python/**/__pycache__/
+python/*.egg-info/
+python/dist/
+python/build/
+python/.pytest_cache/
+php/vendor/
+go/bin/
+**/.pytest_cache/
+**/__pycache__/
+
+# Release bundles and local outputs
+*.zip
+download/
+
+# Lombok Ecosystem internal documents (ADR-024)
+/Map_*.md
+/SPEC_*.md
+/Stucture Repo_*.md
+/TECH DEBT_*.md
+/Architecture_*.md
+/Masterplan_*.md
+/map
+/docs/*architecture*.*
+/docs/*masterplan*.*
+/docs/Architecture_*.md
+/docs/Masterplan_*.md
+/docs/TECH DEBT_*.md
+
+# Editors and OS noise
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db

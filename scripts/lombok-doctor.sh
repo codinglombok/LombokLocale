@@ -58,6 +58,16 @@ done
 for c in composer.json php/composer.json; do
   [ -f "$c" ] && grep -q '"version"' "$c" && err "$c memuat field version (Packagist mengambil versi dari tag)"
 done
+# manifest PHP harus tunggal di root (Packagist hanya membaca composer.json root)
+[ -f php/composer.json ] && err "php/composer.json masih ada - manifest PHP sudah pindah ke root composer.json"
+# dokumen versi lain tidak boleh ikut ter-commit (relapse: salinan *_v<versi-lama>.md hidup kembali)
+for f in docs/*_${REPO}_v*.md; do
+  [ -e "$f" ] || continue
+  case "$f" in
+    *_v${VER}.md) ;;
+    *) err "dokumen versi lain ter-commit: $f (harus *_v${VER}.md)" ;;
+  esac
+done
 
 # ---------------------------------------------------------------- docs
 PUBLIC="changelog map structure_repo full_summary_project guide_how_to_use how_to_dist development_ide API Lang SPEC"
@@ -103,7 +113,7 @@ if [ -f typescript/package.json ]; then has_runner "typescript/test*/*vectors*" 
 if [ -f rust/Cargo.toml ]; then has_runner "rust/tests/*vectors*" || has_runner "rust/*/tests/*vectors*" || has_runner "rust/*-vectors" || err "runner vector Rust tidak ada"; fi
 if [ -f python/pyproject.toml ]; then has_runner "python/tests/*vectors*" || err "runner vector Python tidak ada"; fi
 if [ -f go/go.mod ]; then has_runner "go/*vectors*_test.go" || err "runner vector Go tidak ada"; fi
-if [ -f php/composer.json ]; then has_runner "php/tests/*ectors*" || err "runner vector PHP tidak ada"; fi
+if [ -d php/src ]; then has_runner "php/tests/*ectors*" || err "runner vector PHP tidak ada"; fi
 
 # ---------------------------------------------------------------- claims (ADR-019)
 APPS='RAG[A-Za-z]*|Clarion|DocFlow|PDF|AgenticAuto|Miner|DNSProxy|Proxy'
