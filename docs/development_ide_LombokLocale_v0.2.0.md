@@ -1,49 +1,66 @@
-# LombokLocale — Development IDE v0.2.0
+# LombokLocale — development ideas & backlog v0.2.0
 
-## 1. Lingkungan
+The living backlog of this repository: priorities, done-criteria and
+non-goals. P0 items are release blockers for the `v0.2.0` tag; P1 items are
+follow-ups for the 0.2.x line; P2/P3 are candidates and research. Items move
+up when they get a written decision and a criterion, never by accident.
 
-| Alat | Versi |
+## P0 - before the v0.2.0 tag
+
+| Item | Done when |
 |---|---|
-| Rust | stable (MSRV 1.70, diperiksa CI); `cargo-llvm-cov` untuk coverage |
-| Node.js | 20 LTS atau lebih baru (CI: 20, 22, 24) |
-| Python | 3.9+ (CI: 3.9, 3.11, 3.13); `pytest`, `coverage` |
-| Go | 1.22+ (CI: 1.22, 1.24) |
-| PHP | 8.1+ (CI: 8.1, 8.3); ekstensi `pcov` untuk coverage |
-| Editor | VS Code, RustRover/GoLand/PhpStorm/PyCharm, atau editor lain |
-| Bash | untuk `scripts/lombok-doctor.sh` (Windows: Git Bash atau WSL) |
+| phpstan (level max) over `php/src` | a `phpstan.neon` at level max passes locally and a `phpstan` step runs green in the `php` CI job |
+| Native-speaker review of the 8 machine-translated catalogs (`es fr de pt ru ja ko zh-Hans`) | each `locales/<tag>/lomboklocale.json` reviewed by a native speaker, `locales/STATUS.md` updated, `rust/tests/catalogs.rs` still green |
+| Registry one-time setup | `NPM_TOKEN`, `CARGO_REGISTRY_TOKEN`, PyPI trusted publishing, environments with reviewers (`npm`, `pypi`, `crates`, `docker`, `github-release`), Packagist submit |
+| Release rehearsal | all four `release-*.yml` dry runs pass on `main` |
 
-## 2. Perintah
+## P1 - 0.2.x follow-ups
 
-| Direktori | Perintah | Fungsi |
-|---|---|---|
-| `rust/` | `cargo test` | unit + doctest + runner vector |
-| `rust/` | `cargo clippy --all-targets -- -D warnings` · `cargo fmt --check` | lint |
-| `rust/` | `cargo llvm-cov --fail-under-lines 90` | coverage |
-| `typescript/` | `npm ci` · `npm run lint` · `npm test` | tipe strict, test |
-| `typescript/` | `npm run coverage` | test dengan ambang baris 90, cabang 90, fungsi 85 |
-| `python/` | `python -m pytest` · `coverage run --branch --source=lomboklocale -m pytest && coverage report --fail-under=90` | test, coverage |
-| `go/` | `go vet ./...` · `go test -cover ./...` | lint, test |
-| `php/` | `php tests/run.php` · `php -d pcov.enabled=1 tests/run.php --coverage=90` | test, coverage |
-| root | `python3 scripts/gen_ports.py` (`--check` di CI) | bangun ulang tabel data kelima port dari `data/cldr47.json` |
-| root | `python3 vectors/build_vectors.py` | bangun ulang berkas vector |
-| root | `node vectors/check_icu.mjs` | cek silang vector ke ICU (butuh Node.js dengan CLDR 47, mis. Node 22 ICU 77) |
-| root | `python3 scripts/extract_cldr.py <cldr-json>` | ekstrak ulang `data/cldr47.json` dari unduhan `cldr-json` 47.0.0 |
-| root | `bash scripts/lombok-doctor.sh LombokLocale` | pemeriksaan standar Lombok v3.6 |
+| Item | Done when |
+|---|---|
+| Stricter Python lint baseline | `ruff check` with the default rule set passes (today: 41 findings recorded in the tech-debt file; currently gated at `E4,E7,E9,F`) |
+| Stricter Python typing | `mypy --strict lomboklocale` passes (today: 29 strict findings; currently gated plain) |
+| MSRV bump evaluation | decide whether Rust MSRV stays 1.70 or follows ecosystem policy upward; recorded decision either way |
+| `check_icu.mjs` on pinned ICU | run the cross-check in CI against an ICU build with CLDR 47 (currently it skips on CLDR 48 machines) |
+| More own-library locales (`ar`, `hi`, `tr`, `vi`, `ms`, `jv`, `su` ...) | native-reviewed catalogs, keys identical to `en`, catalogs test green |
 
-## 3. Alur mengubah perilaku
+## P2 - 0.3.0 candidates (all SPEC-first)
 
-1. Ubah SPEC lebih dulu (untuk data: ubah `scripts/extract_cldr.py`, lalu `gen_ports.py`).
-2. Ubah model di `vectors/build_vectors.py` dan tambah kasus. Nilai harapan kasus tulis tangan harus cocok dengan model; builder menolak bila tidak.
-3. Jalankan builder, perbarui `vectors/SHA256SUMS` dan hash di SPEC.
-4. Ubah kelima port sampai semua runner hijau.
-5. Catat di `CHANGELOG.md`.
+| Item | Notes |
+|---|---|
+| Time-of-day formatting | fixed UTC offsets only, CLDR time patterns; no timezone database |
+| MessageFormat 2 (LDML 47) evaluation | a separate mode, not a break of the ICU subset |
+| More currency symbols | extend the 14-currency subset; regenerate ports via `extract_cldr.py` + `gen_ports.py` |
+| Compact notation / significant digits | new style; needs vectors for all five ports |
+| CLI smoke binary | a small `cargo` example + npm bin entry running the quickstart |
 
-## 4. Arah pengembangan
+## P3 - research
 
-- Menambah locale data (bahasa Nusantara jv/su sudah, berikutnya ban, min, bug, mak dll. bila CLDR tersedia) lewat `LOCALES` di `scripts/extract_cldr.py`.
-- Jam dan zona waktu, waktu relatif, daftar (`ListFormat`), satuan.
-- Digit asli (`arab`, `deva`, `thai`) dan kalender Buddhis/Hijriah lewat `-u-nu`/`-u-ca`.
-- Rantai `parentLocales` CLDR untuk fallback data.
-- Pembaruan ke CLDR 48: ekstrak ulang data, bangun ulang vector, cek silang ke ICU yang sesuai.
+- Runtime catalog loading patterns (streamed vs embedded) without adding
+  file I/O to the core (SPEC section 10 keeps the core I/O-free).
+- A sixth port (e.g. C via the Rust crate) - only if an ecosystem project
+  actually needs it; the CI hashFiles guard pattern stays available.
+- Fuzzing harnesses over `parse_tag`, `format_message` and `parse_catalog`.
 
-*Lisensi dokumen: Apache-2.0 OR MIT · © codinglombok*
+## Non-goals
+
+- No runtime downloads of locale data; everything is embedded.
+- No timezone database, no calendar systems beyond Gregorian, no non-Latin
+  digit output (the `-u-nu-*` extension is ignored by design).
+- No full ICU/CLDR parity: the four documented differences in SPEC section 9
+  are contract, not bugs.
+- No runtime dependency in any port, ever; dev/test tooling is allowed in
+  CI only.
+- No feature that cannot be vectorized deterministically across all five
+  ports.
+
+## How to contribute an item
+
+1. Write the done-criterion first (measurable, testable).
+2. If it changes behavior: SPEC first, then vectors, then all five ports in
+   one change (the CI standards job rejects stale vectors or tables).
+3. Keep the artifacts English; run
+   `bash scripts/lombok-doctor.sh LombokLocale` before opening the pull
+   request.
+
+*Document license: Apache-2.0 OR MIT. (c) codinglombok*

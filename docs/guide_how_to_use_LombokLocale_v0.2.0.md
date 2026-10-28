@@ -1,79 +1,120 @@
-# LombokLocale — Guide How to Use v0.2.0
+# LombokLocale — how to use v0.2.0
 
-## 1. Pemasangan
+Installation per registry, a five-minute quickstart, a cookbook of common
+tasks, and troubleshooting. Every snippet below is byte-verified by the
+repository's own test suites; copy them freely.
 
-| Bahasa | Perintah | Syarat |
+## Installation
+
+| Language | Install | Import |
 |---|---|---|
-| Rust | `cargo add lomboklocale` | Rust 1.70+ (`default-features = false` untuk `no_std`) |
-| TypeScript/JS | `npm install lomboklocale` | Node.js 20+, Deno, Bun, browser modern |
-| Python | `pip install lomboklocale` | Python 3.9+ |
-| Go | `go get github.com/codinglombok/lomboklocale/go` | Go 1.22+ |
-| PHP | `composer require codinglombok/lomboklocale` | PHP 8.1+ |
+| Rust | `cargo add lomboklocale` (crates.io) | `use lomboklocale::...;` |
+| TypeScript / JavaScript | `npm install lomboklocale` | `import ... from 'lomboklocale'` or `require('lomboklocale')` |
+| Python | `pip install lomboklocale` (PyPI) | `from lomboklocale import ...` |
+| Go | `go get github.com/codinglombok/lomboklocale/go@go/v0.2.0` | `import "github.com/codinglombok/lomboklocale/go"` (package `lomboklocale`) |
+| PHP | `composer require codinglombok/lomboklocale` | `use LombokLocale\Locale;` |
 
-## 2. Memilih locale
+No port has runtime dependencies, so none of the above pulls anything else.
 
-```ts
-const tag = negotiate(navigatorLanguages, ['en', 'id', 'ja'], 'en');   // RFC 4647 lookup
-canonicalize('EN_us');                                                 // "en-US"
-dataLocale('zh-TW');                                                   // "zh-Hant" (data yang dipakai untuk format)
-```
+## Five-minute quickstart
 
-Simpan hasil `negotiate` per pengguna; semua fungsi format menerima tag apa pun dan tidak gagal karena locale.
-
-## 3. Angka dan mata uang
-
-Berikan angka sebagai teks desimal bila nilainya penting secara hukum (uang, pajak): `"1234.50"` dibulatkan secara eksak, tidak lewat float.
-
-| Panggilan (TS) | Hasil |
-|---|---|
-| `formatNumber('id', '1234567.891')` | `1.234.567,891` |
-| `formatNumber('es', '1234')` | `1234` (minimum grouping 2) |
-| `formatNumber('id', '15000', { style: 'currency', currency: 'IDR' })` | `Rp 15.000,00` (U+00A0) |
-| `formatNumber('ja', '15000', { style: 'currency', currency: 'JPY' })` | `￥15,000` (JPY tanpa desimal) |
-| `formatNumber('en', '0.256', { style: 'percent' })` | `26%` |
-| `formatNumber('en', '2.5', { maxFraction: 0 })` | `3` (setengah menjauhi nol) |
-
-## 4. Tanggal
-
-`formatDate('id', '2026-10-02', 'full')` → `Jumat, 02 Oktober 2026`; gaya `full`, `long`, `medium` (bawaan), `short`. Masukan selalu `YYYY-MM-DD`; tidak ada jam atau zona waktu, jadi tanggal tidak bergeser karena zona waktu server.
-
-## 5. Plural dan pesan
+Pick the locale once, format everywhere, and keep numbers exact by passing
+them as decimal text. TypeScript example (identical logic in every port):
 
 ```ts
-pluralCategory('ru', 22);   // "few"
-formatMessage('ru', '{n, plural, one{# файл} few{# файла} many{# файлов} other{# файла}}', { n: 22 });  // "22 файла"
-formatMessage('en', '{n, plural, offset:1 =0{nobody} =1{{who}} one{{who} and # other} other{{who} and # others}}',
-              { n: 5, who: 'Ana' });                      // "Ana and 4 others"
-formatMessage('id', 'Jatuh tempo {d, date}', { d: '2026-10-02' });   // "Jatuh tempo 2 Okt 2026"
+import { negotiate, formatNumber, formatDate, formatMessage, pluralCategory } from 'lomboklocale';
+
+// 1. Which locale should we serve? (RFC 4647 lookup over what you support)
+const locale = negotiate(['id-ID', 'en-US'], ['en', 'id', 'ja'], 'en');   // "id"
+
+// 2. Money and big numbers: decimal text keeps 0.1+0.2 and 1e21 exact.
+formatNumber(locale, '1234567.891');                                    // "1.234.567,891"
+formatNumber('de', '15000', { style: 'currency', currency: 'EUR' });     // "15.000,00 €" (nbsp before €)
+
+// 3. Dates from a plain YYYY-MM-DD string.
+formatDate('id', '2026-10-02', 'full');                                 // "Jumat, 02 Oktober 2026"
+
+// 4. Plural-aware messages with the ICU subset.
+const files = 1234;
+pluralCategory('pl', files);                                            // "many" (CLDR 47)
+formatMessage('en', '{n, plural, one{# file} other{# files}}', { n: files }); // "1,234 files"
 ```
 
-Selalu sertakan `other`. Untuk tanda kurung kurawal literal tulis `'{'`; untuk apostrof tulis `''`.
+Rust equivalent:
 
-## 6. Katalog
+```rust
+use lomboklocale::{negotiate, format_number, format_message, Arg, NumberOptions};
+
+let locale = negotiate(&["id-ID"], &["en", "id"], "en");
+let total  = format_number("id", "15000", &NumberOptions::currency("IDR"))?;
+let text   = format_message("en", "Total: {n}", &[("n", Arg::from(1234567.5))])?;
+```
+
+## Cookbook
+
+### Exact money math (never through binary floats)
+
+```python
+from decimal import Decimal
+from lomboklocale import format_number
+
+total = format_number("id", Decimal("45000.30"), style="currency", currency="IDR")
+# "Rp 45.000,30"
+```
+
+Pass floats only for display; the ports convert them to the shortest
+round-tripping decimal text first, matching every other port. For message
+arguments, `Num` carries exact decimals: `format_message("en", "Total {n}",
+{"n": Num("45000.30")})`.
+
+### Locale-aware strings without a framework
+
+```php
+use LombokLocale\Locale;
+
+$catalog = Locale::parseCatalog(file_get_contents('locales/id/lomboklocale.json'));
+$m = Locale::resolve('id', $catalog, 'ERR_NOT_FOUND', 'error.notFound',
+                     ['name' => 'invoice.txt']);
+echo $m->text;        // "invoice.txt tidak ditemukan" or "!!error.notFound!!" when missing
+echo $m->fallback;    // false / true - missing translations stay visible, never blank
+```
+
+### Ordinal endings (1st, 2nd, 3rd ...)
+
+```go
+import lomboklocale "github.com/codinglombok/lomboklocale/go"
+
+s, _ := lomboklocale.FormatMessage("en",
+    "{n, selectordinal, one{#st} two{#nd} few{#rd} other{#th}}",
+    map[string]lomboklocale.Arg{"n": lomboklocale.Int(23)}) // "23rd"
+```
+
+### Picking the right plural for a free-form locale list
+
+```rust
+use lomboklocale::{plural_category, PluralCategory};
+assert_eq!(plural_category("ar", "0")?, PluralCategory::Zero);
+assert_eq!(plural_category("ar", "2")?, PluralCategory::Two);
+assert_eq!(plural_category("hr", "5")?, PluralCategory::Other); // fixed in 0.2.0
+```
+
+### Validation without formatting
 
 ```ts
-const id = parseCatalog(readFileSync('locales/id/app.json', 'utf8'));
-const msg = resolve('id', id, 'TOO_SHORT', 'validator.too_short', { min: 8 });
-if (msg.fallback) log.warn('missing translation', msg.messageId);
-show(msg.text);
+import { parseTag, canonicalize } from 'lomboklocale';
+canonicalize('EN_latn-us-x-foo');  // "en-Latn-US-x-foo", throws LocaleError otherwise
 ```
 
-Program membandingkan `msg.code`, bukan teks. Terjemahan yang hilang tampil sebagai `!!id!!` sehingga mudah ditemukan saat uji.
+## Troubleshooting
 
-## 7. Skenario netral
-
-1. Toko daring dengan frontend TypeScript dan backend PHP: total keranjang dan pesan "3 barang" sama di kedua sisi.
-2. Aplikasi lapangan offline (Rust `no_std` di perangkat) yang mencetak struk dengan format rupiah.
-3. Laporan PDF dari Python dan dasbor web yang menampilkan angka dan tanggal yang sama.
-4. Layanan Go yang memilih bahasa email dari header `Accept-Language` dengan `negotiate`.
-
-## 8. Pemecahan masalah
-
-| Gejala | Penyebab | Solusi |
+| Symptom | Cause | Fix |
 |---|---|---|
-| spasi di angka tidak cocok dengan string uji | CLDR memakai U+00A0 / U+202F | bandingkan dengan karakter yang sama, bukan spasi biasa |
-| `0.1 + 0.2` tampil `0.3` | default maks 3 digit pecahan | atur `maxFraction` |
-| `xx-YY` diformat seperti `en` | tidak ada data locale itu | lihat daftar 28 locale di SPEC §1 |
-| `BAD_ARGUMENT` pada plural | argumen berupa teks | kirim angka (Python: `Num("1.50")`, TS: `{ num: "1.50" }`) |
+| `BAD_NUMBER` with a value that looks fine | the value contains a group separator, `.5`, `1.` or an exponent above 1000 | pass plain decimal text (SPEC section 3); group separators are output-only |
+| `BAD_ARGUMENT` on a `{n, plural, ...}` | the argument is a string that is not decimal text, or NaN/infinity | pass a number or decimal text; check the argument name |
+| `!!some.message.id!!` in the output | the id is missing from the catalog or its pattern failed | the fallback marker is intentional (fail-visible); add the id to the catalog |
+| `MISSING_OTHER` | a plural/select block has no `other` key | add `other{...}`; it is mandatory in the subset |
+| Currency shows the ISO code instead of a symbol | the currency has no symbol in the CLDR subset | expected: `¤` falls back to the ISO code (14 currencies carry symbols) |
+| Formatting in `xx` locale falls back to English digits/patterns | only 28 locales carry number/date data | plural rules still apply per locale; data for more locales can be added by re-running `scripts/extract_cldr.py` with an extended locale list |
+| Windows output looks the same as Linux | yes - that is the contract | every port is byte-identical on every OS; differences are bugs |
 
-*Lisensi dokumen: Apache-2.0 OR MIT · © codinglombok*
+*Document license: Apache-2.0 OR MIT. (c) codinglombok*

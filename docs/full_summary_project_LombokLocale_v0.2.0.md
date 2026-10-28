@@ -1,60 +1,89 @@
-# LombokLocale — Full Summary Project v0.2.0
+# LombokLocale — full project summary v0.2.0
 
-| Item | Nilai |
+Purpose, architecture, current status against the SPEC, measured metrics and
+the roadmap, in one page. Companion documents: the
+[SPEC](SPEC_LombokLocale_v0.2.0.md) (the contract), the
+[API map](API_LombokLocale_v0.2.0.md) (the surface) and the
+[distribution guide](how_to_dist_LombokLocale_v0.2.0.md) (the release path).
+
+## Purpose
+
+Applications that render user-facing text in more than one place - a browser,
+a server, a batch job - get different numbers, dates and plural wording from
+each stack's built-in formatter, because each ships a different CLDR version
+with different defaults. An invoice total then differs between the frontend
+and the backend, and "3 files" is spelled wrong in half of the locales.
+LombokLocale pins the data (CLDR 47.0.0), pins the behavior (a normative SPEC
+plus 342 deterministic vectors) and ships the exact same results as a
+zero-dependency library in Rust, TypeScript, Python, Go and PHP. It is the
+localization core of the Lombok Ecosystem: any project can adopt it from its
+own registry and get identical text everywhere.
+
+## Architecture
+
+One reference implementation and four verified ports. The Rust crate owns
+the contract; TypeScript, Python, Go and PHP are behaviorally identical by
+construction because all five run the same 342-case vector file in CI and
+the vectors are generated from an independent model, not from any port.
+
+```
+cldr-json 47.0.0 --extract--> data/cldr47.json --gen_ports--> embedded tables (5 ports)
+reference model (Python, build_vectors.py) --> vectors/*.json --(one file)--> 5 test suites
+                                              ICU cross-check (check_icu.mjs)
+```
+
+Key design decisions:
+
+- Numbers are exact decimal text end to end; binary floats are converted
+  once, to their shortest round-tripping decimal. `0.1 + 0.2` and `1e1000`
+  are formatted exactly, half away from zero (SPEC section 3 and 5).
+- The ICU MessageFormat subset covers the constructs real catalogs need
+  (plural, select, selectordinal, offset, `=n`, number, date, apostrophe
+  quoting, locale-formatted `#`); anything outside the subset fails with a
+  stable code instead of guessing (fail-closed).
+- Errors are part of the contract: 16 codes, compared by the vectors.
+- The Rust crate is `no_std` + `alloc` with `#![forbid(unsafe_code)]`;
+  no port has runtime dependencies.
+- The data subset is exactly what the library uses (28 data locales, plural
+  rules for 219 locales, ordinals for 104, 14 currencies) and its provenance
+  and Unicode License v3 terms are recorded in `NOTICE`.
+
+## Status vs the SPEC (0.2.0)
+
+| Contract area | Status |
 |---|---|
-| Deskripsi | Tag BCP 47 dan negosiasi, aturan plural CLDR 47, format angka/persen/mata uang/tanggal, subset ICU MessageFormat, dan katalog pesan JSON, dengan hasil sama di 5 bahasa; tanpa dependensi runtime |
-| Cluster · tingkat | 01 Fondasi & Runtime · L0 |
-| Referensi | SPEC + model Python di `vectors/build_vectors.py` + pemeriksaan silang ICU 77.1 (`vectors/check_icu.mjs`) |
-| Port | Rust (`no_std` + `alloc`), TypeScript, Python, Go, PHP |
-| Vector | 342 kasus · SHA-256 `0808e475...5d8da898` |
-| Test | Rust 8 tes API + runner vector + tes katalog · TS 350 · Python 350 · Go tes API + runner vector · PHP 58 cek API + 343 cek vector |
-| Coverage | Rust 95,9% baris · TS 98,8% baris / 96,2% cabang · Python 97% · Go 94,7% · PHP 96,9% baris |
-| Registry | crates.io, npm, PyPI `lomboklocale`; Go `github.com/codinglombok/lomboklocale/go`; Packagist `codinglombok/lomboklocale` (semua belum terbit) |
-| Lisensi | kode Apache-2.0 OR MIT; data CLDR Unicode License v3 |
+| BCP 47 parsing, canonicalization, RFC 4647 negotiation | implemented, vector-pinned (parse 30, negotiate 16, dataLocale 13 cases) |
+| CLDR plural + ordinal rules | implemented from generated tables (92 cases), ICU cross-checked |
+| Number / percent / currency formatting | implemented (83 cases) incl. Indian grouping, minimum grouping digits, currency spacing |
+| Date formatting (4 styles, Gregorian, Latin digits) | implemented (34 cases) |
+| MessageFormat subset + strict catalogs | implemented (message 51, catalog 18, resolve 5 cases), `MISSING_OTHER`, `TOO_DEEP` enforced |
+| Error codes | 16 codes, identical in all ports |
+| Security bounds (subtag 8, exponent 1000, depth 16, JSON depth 64) | enforced, tested |
+| Known ICU differences | 4, documented in SPEC section 9 |
 
-## 1. Tabel gap vs pembanding (jujur)
+## Metrics (measured at 0.2.0)
 
-| Kemampuan | LombokLocale 0.2.0 | ICU4X (Rust) | Intl (JS) | Babel (Python) | golang.org/x/text | intl ICU (PHP) |
-|---|---|---|---|---|---|---|
-| Hasil identik lintas bahasa (SPEC + vector) | YA | TIDAK | TIDAK | TIDAK | TIDAK | TIDAK |
-| Versi CLDR terkunci di paket | YA (47) | YA | bergantung runtime | YA | YA | bergantung ICU sistem |
-| Aturan plural semua locale | YA | YA | YA | YA | YA | YA |
-| Format angka/mata uang/tanggal | 28 locale | semua | semua | semua | sebagian | semua |
-| Waktu, zona waktu, relatif, daftar, satuan | TIDAK | YA | YA | YA | sebagian | YA |
-| Kalender non-Gregorian, digit non-Latin | TIDAK | YA | YA | YA | sebagian | YA |
-| MessageFormat | subset ICU | TIDAK | TIDAK (bawaan) | TIDAK (gettext) | TIDAK | YA (MessageFormatter) |
-| Angka sebagai desimal eksak | YA | YA (fixed_decimal) | YA (string, ES2023) | YA (Decimal) | TIDAK | parsial |
-| Tanpa dependensi native | YA | YA | bawaan | YA | YA | butuh ekstensi intl |
+| Metric | Value |
+|---|---|
+| Vector cases (shared, deterministic) | 342 (SHA-256 pinned in the SPEC and `vectors/SHA256SUMS`) |
+| Ports passing the full vector file | 5 of 5 |
+| TypeScript tests / coverage | 350 passed; 98.96% line, 96.36% branch, 100% functions |
+| Python tests / coverage | 350 passed; 97% (branch mode) |
+| Rust / Go / PHP suites | run per push in CI (cargo fmt/clippy/test + llvm-cov 90; gofmt/vet/test cover 90; php -l + run.php cover 90) |
+| Runtime dependencies | 0 in every port |
+| Code size (reference) | ~3,065 lines of Rust incl. generated tables |
 
-Posisi unik yang dibuktikan test: teks yang sama, sampai ke spasi tak putus, untuk angka, mata uang, tanggal, plural dan pesan di lima bahasa, dengan versi data tertanam yang sama.
+## Roadmap
 
-## 2. Batasan yang Diketahui
+- 0.2.x: keep CLDR 47 pinned; port-level hardening already tracked as P0-P1
+  in the backlog ([development_ide](development_ide_LombokLocale_v0.2.0.md)):
+  `phpstan` at level max, stricter ruff/mypy baselines, more locales for the
+  library's own catalogs (native-speaker review).
+- 0.3.0 candidates: time-of-day formatting (fixed offsets only), more
+  currency symbols, MessageFormat 2 evaluation - all gated by the
+  SPEC-first protocol (SPEC + vectors + all five ports in one change).
+- Non-goals stay non-goals: no timezone database, no locale data downloads at
+  runtime, no full ICU parity (the four documented differences stand), no
+  MessageFormat features beyond the subset.
 
-1. Data angka/tanggal hanya untuk 28 locale; locale lain diformat sebagai `en` (tetapi memakai aturan pluralnya sendiri).
-2. Hanya digit Latin dan kalender Gregorian; `-u-nu`/`-u-ca` diabaikan (tanggal `th` memakai tahun Masehi, angka `ar` memakai digit Latin).
-3. Tidak ada jam, zona waktu, waktu relatif, daftar, satuan, notasi ringkas atau ilmiah, mata uang accounting.
-4. MessageFormat adalah subset ICU: tanpa `choice`, `spellout`, gaya `currency`; bukan sintaks MessageFormat 2.
-5. Rantai fallback data mengikuti pemotongan tag, bukan `parentLocales` CLDR (mis. `en-AU` memakai `en`, bukan `en-001`; `pt-AO` memakai `pt`, bukan `pt-PT`).
-6. Empat perbedaan dengan ICU 77.1 tercatat di SPEC §9.
-7. Katalog selain `en` dan `id` adalah draf terjemahan mesin.
-8. Paket PHP berada di subdirektori; Packagist butuh repositori split.
-
-## 3. Prinsip Universal (ringkas, untuk publik)
-
-| Prinsip | Status | Bukti |
-|---|---|---|
-| U1 Mandiri | YA | README tanpa klaim kepemilikan |
-| U2 Modern | YA | CLDR 47.0.0, RFC 5646/4647, tanggal tinjauan di SPEC |
-| U3 Multi-platform | YA | CI ubuntu/windows/macos; Rust `no_std` + `alloc` |
-| U4 Multi-bahasa | YA | 5 port, runner vector di semua port |
-| U5 Rentang skala | YA | perangkat kecil (`no_std`) sampai server |
-| U6 Lengkap & unik | SEBAGIAN | tabel gap di atas |
-| U7 Aman & teruji | YA | SPEC §10; `forbid(unsafe_code)`; coverage ≥ 94% di semua port; cek silang ICU |
-| U8 Ekosistem tanpa kopling | YA | 0 dependensi wajib |
-| U9 Internasional | YA | inti i18n ekosistem; Lang_ |
-| U10 Lisensi | YA | Apache-2.0 OR MIT + Unicode License v3 untuk data |
-| U11 Siap registri | SEBAGIAN | crates/npm/PyPI/Go siap; Packagist butuh split repo |
-| U12 Dokumentasi | YA | 10 dokumen publik + 2 internal |
-| U13 Kerahasiaan & dokumen bersih | YA | `lombok-doctor.sh`: 0 emoji, `.gitignore` ADR-024 |
-
-*Lisensi dokumen: Apache-2.0 OR MIT · © codinglombok*
+*Document license: Apache-2.0 OR MIT. (c) codinglombok*

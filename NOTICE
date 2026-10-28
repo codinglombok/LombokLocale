@@ -1,0 +1,52 @@
+NOTICE — LombokLocale
+=====================
+
+This repository ships code and embedded Unicode CLDR data. The two are
+licensed differently; both licenses apply to the distributed packages.
+
+Code
+----
+The library code in `rust/`, `typescript/`, `python/`, `go/`, `php/`,
+`scripts/`, `vectors/` and `locales/` is licensed under your choice of
+Apache License 2.0 or MIT (see `LICENSE-APACHE` and `LICENSE-MIT`).
+
+Embedded CLDR data
+------------------
+The file `data/cldr47.json` and the generated port tables derived from it
+(`rust/src/data.rs`, `typescript/src/data.ts`, `python/lomboklocale/_data.py`,
+`go/data.go`, `php/src/Data.php`) embed a subset of the Unicode Common
+Locale Data Repository (CLDR), release 47.0.0, distributed by Unicode as the
+`cldr-json` package (tag `47.0.0`, https://github.com/unicode-org/cldr-json).
+
+That subset is limited to what the library actually uses:
+
+- number, percent and currency symbols and patterns for 28 locales
+  (`en`, `en-GB`, `en-IN`, `id`, `ms`, `jv`, `su`, `de`, `fr`, `es`, `pt`,
+  `pt-PT`, `it`, `nl`, `ru`, `uk`, `pl`, `tr`, `ar`, `hi`, `zh`, `zh-Hant`,
+  `ja`, `ko`, `vi`, `th`, `sv`, `cy`);
+- the default fraction digits of 14 currencies (ISO 4217: USD, EUR, GBP, JPY,
+  CNY, IDR, MYR, SGD, INR, KRW, SAR, AUD, THB, VND);
+- date patterns and the format-context month, day and era names of the same
+  28 locales;
+- cardinal plural rules for 219 locales and ordinal rules for 104 locales.
+
+The data was extracted by `scripts/extract_cldr.py` and embedded into each
+port by `scripts/gen_ports.py`; the regeneration is checked in CI
+(`python3 scripts/gen_ports.py --check`). No other CLDR content is included,
+and nothing is fetched at runtime.
+
+The CLDR data is copyright (c) 1991-2026 Unicode, Inc. and is licensed under
+the Unicode License v3 (see `LICENSE-UNICODE`; use of the data is subject to
+the license terms and the disclaimer therein). "Unicode" and "CLDR" are
+trademarks of Unicode, Inc.; this project is not endorsed by or affiliated
+with the Unicode Consortium.
+
+Port message catalogs
+---------------------
+The message catalogs in `locales/<tag>/lomboklocale.json` contain the
+user-facing messages of this library itself, written for this project
+(English source of truth; reviewed Indonesian; machine-translated drafts for
+the other languages, see `locales/STATUS.md`). They are not CLDR data.
+
+(c) 2026 codinglombok. Apache-2.0 OR MIT for the code; Unicode License v3
+for the embedded CLDR subset.

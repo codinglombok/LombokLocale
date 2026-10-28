@@ -1,11 +1,11 @@
-# Katalog pesan LombokLocale
+# LombokLocale message catalogs
 
-| Bahasa | Kode | Status |
+| Language | Code | Status |
 |---|---|---|
-| English | `en` | sumber kebenaran |
-| Bahasa Indonesia | `id` | ditulis dan ditinjau pemilik ekosistem |
-| Español, Français, Deutsch, Português, Русский, 日本語, 한국어, 简体中文 | `es` `fr` `de` `pt` `ru` `ja` `ko` `zh-Hans` | draf terjemahan mesin; wajib ditinjau penutur asli sebelum dianggap final |
+| English | `en` | source of truth |
+| Bahasa Indonesia | `id` | written and reviewed by the ecosystem owner |
+| Español, Français, Deutsch, Português, Русский, 日本語, 한국어, 简体中文 | `es` `fr` `de` `pt` `ru` `ja` `ko` `zh-Hans` | machine-translated drafts; must be reviewed by native speakers before they are considered final |
 
-Aturan: kunci (`messageId`) dan placeholder (`{requested}`, `{fallback}`, `{messageId}`) harus identik dengan `en`, dan setiap berkas harus lolos `parse_catalog`. Keduanya diperiksa oleh `rust/tests/catalogs.rs` di CI.
+Rules: the keys (`messageId`) and the placeholders (`{requested}`, `{fallback}`, `{messageId}`) must stay identical to `en`, and every file must pass `parse_catalog`. Both properties are enforced by `rust/tests/catalogs.rs` in CI.
 
-Belum ada: `ar`, `hi`, `bn`, `tr`, `vi`, `th`, `it`, `pl`, `nl`, `uk`, dan bahasa Nusantara (`jv`, `su`, `ms`). Kontribusi penutur asli diterima lewat pull request.
+Still missing: `ar`, `hi`, `bn`, `tr`, `vi`, `th`, `it`, `pl`, `nl`, `uk`, and Nusantara languages (`jv`, `su`, `ms`). Contributions from native speakers are welcome via pull request.
