@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union, cast
 
 from ._data import DATA
 
@@ -718,7 +718,7 @@ def _render(locale: str, parts: list, args: Mapping[str, Arg], pound: Optional[s
         elif kind == "simple":
             a = _lookup(args, p[1])
             n = _arg_number(a)
-            out.append(a if n is None else _fmt_arg(locale, p[1], n))
+            out.append(cast(str, a) if n is None else _fmt_arg(locale, p[1], n))
         elif kind == "number":
             n = _arg_number(_lookup(args, p[1]))
             if n is None:
