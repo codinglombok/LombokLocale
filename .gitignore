@@ -34,7 +34,16 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Dokumen internal (ADR-024)
+# ===== Lombok Ecosystem — internal documents (not committed; ADR-024) =====
 /map
+/Map_*.md
+/SPEC_*.md
+/Stucture Repo_*.md
+/TECH DEBT_*.md
+/Architecture_*.md
+/Masterplan_*.md
 /docs/*architecture*.*
 /docs/*masterplan*.*
+/docs/Architecture_*.md
+/docs/Masterplan_*.md
+/docs/TECH DEBT_*.md

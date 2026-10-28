@@ -25,7 +25,9 @@ Part of the [Lombok Ecosystem](https://github.com/codinglombok).
 | TypeScript / JavaScript | `lomboklocale` (npm) | not yet published |
 | Python | `lomboklocale` (PyPI) | not yet published |
 | Go | `github.com/codinglombok/lomboklocale/go` | tag `go/v0.2.0` on release |
-| PHP | `codinglombok/lomboklocale` (Packagist) | needs a split repository first |
+| PHP | `codinglombok/lomboklocale` (Packagist) | root `composer.json`, no `version` field: versioned by the `v*` tags |
+
+The npm package ships dual ESM and CJS builds: `import ... from 'lomboklocale'` and `require('lomboklocale')` both work.
 
 ## Quick start
 
@@ -82,12 +84,13 @@ Latin digits and the Gregorian calendar only; number/date data for 28 locales (o
 python3 scripts/gen_ports.py --check && python3 vectors/build_vectors.py && node vectors/check_icu.mjs
 cd rust && cargo test && cargo clippy --all-targets -- -D warnings
 cd typescript && npm ci && npm run coverage
-cd python && python -m pytest
+cd python && python -m pytest && python -m ruff check --select E4,E7,E9,F . && python -m mypy lomboklocale
 cd go && go test ./...
 cd php && php tests/run.php
 bash scripts/lombok-doctor.sh LombokLocale
+docker build -t lomboklocale:local . && docker run --rm lomboklocale:local
 ```
 
 ## License
 
-Code: Apache-2.0 OR MIT, at your option ([LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT)). Embedded CLDR data: Unicode License v3 ([LICENSE-UNICODE](LICENSE-UNICODE)).
+Code: Apache-2.0 OR MIT, at your option ([LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT)). Embedded CLDR data: Unicode License v3 ([LICENSE-UNICODE](LICENSE-UNICODE)); the data subset, its source and its license are recorded in [NOTICE](NOTICE).
