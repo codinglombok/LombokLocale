@@ -27,18 +27,21 @@
     "directory": "typescript"
   },
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/cjs/index.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
     "dist/*.js",
     "dist/*.d.ts",
+    "dist/cjs/*.js",
+    "dist/cjs/package.json",
     "README.md",
     "LICENSE-APACHE",
     "LICENSE-MIT",
@@ -46,7 +49,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/write-cjs-marker.mjs",
     "build:test": "tsc -p tsconfig.test.json",
     "test": "npm run build:test && cd build && node --test",
     "coverage": "npm run build:test && node scripts/coverage.mjs build",
