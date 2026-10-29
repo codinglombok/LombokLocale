@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union, cast
 
 from ._data import DATA
 
@@ -723,7 +723,7 @@ def _render(locale: str, parts: list, args: Mapping[str, Arg], pound: Optional[s
             n = _arg_number(_lookup(args, p[1]))
             if n is None:
                 raise LocaleError("BAD_ARGUMENT", p[1])
-            kw = {"max_fraction": 0} if p[2] == "integer" else {"style": "percent"} if p[2] == "percent" else {}
+            kw: Dict[str, Any] = {"max_fraction": 0} if p[2] == "integer" else {"style": "percent"} if p[2] == "percent" else {}
             out.append(_fmt_arg(locale, p[1], n, **kw))
         elif kind == "date":
             a = _lookup(args, p[1])
