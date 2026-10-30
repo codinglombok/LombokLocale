@@ -35,8 +35,8 @@ jobs:
         with:
           workspaces: rust
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
 
   rust-msrv:
     name: Rust MSRV 1.70
@@ -49,8 +49,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: "1.70"
-      - run: cargo check --lib
-      - run: cargo check --lib --no-default-features
+      - run: cargo check --locked --lib
+      - run: cargo check --locked --lib --no-default-features
 
   rust-coverage:
     name: Rust coverage

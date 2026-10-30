@@ -1,7 +1,10 @@
 # Rust
 /rust/target/
 **/*.rs.bk
-Cargo.lock
+# rust/Cargo.lock is COMMITTED: reproducible CI (cargo test/clippy/check run
+# with --locked) and --locked packaging; the dev-dependency (serde_json) stays
+# pinned. The lock is ignored by Cargo when this repo is consumed as a
+# dependency, so it has zero effect on library users.
 
 # Node / TypeScript
 node_modules/

@@ -1,0 +1,9 @@
+# Dependabot menjaga rust/Cargo.lock tetap segar: Cargo.lock di-commit dan CI
+# berjalan dengan --locked, jadi setiap bump dev-dependency (serde_json)
+# datang sebagai PR yang menyertakan pembaruan lock.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule:
+      interval: weekly
